@@ -12,6 +12,12 @@ function validDone(d) {
   return d && typeof d.id === "string" && typeof d.text === "string" && typeof d.completedAt === "number"
 }
 
+// Only the first character — never force-lowercases the rest, so acronyms
+// and proper nouns ("BIOS settings") survive intact.
+function capitalizeFirst(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
 function startOfToday() {
   var now = new Date()
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -46,7 +52,7 @@ function serializeState(tasks, done) {
 function addTask(tasks, text) {
   var trimmed = String(text || "").trim()
   if (!trimmed || tasks.length >= 3) return tasks
-  return tasks.concat([{ id: generateId(), text: trimmed }])
+  return tasks.concat([{ id: generateId(), text: capitalizeFirst(trimmed) }])
 }
 
 // Moves a task out of the active list and into the done log with a
@@ -82,7 +88,8 @@ function restoreTask(tasks, done, id) {
 function updateTaskText(tasks, id, text) {
   var trimmed = String(text || "").trim()
   if (!trimmed) return tasks
-  return tasks.map(function(t) { return t.id === id ? { id: t.id, text: trimmed } : t })
+  var capitalized = capitalizeFirst(trimmed)
+  return tasks.map(function(t) { return t.id === id ? { id: t.id, text: capitalized } : t })
 }
 
 // Priority is just list order. Promoting moves a task to the front rather

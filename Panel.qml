@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -250,7 +251,7 @@ Panel {
 
         Text {
           textFormat: Text.PlainText
-          text: "TODAY — TOP 3"
+          text: "TODAY'S TOP 3"
           color: Qt.darker(root.bar.foreground, 1.2)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -266,7 +267,7 @@ Panel {
             required property var modelData
             required property int index
             width: column.width
-            height: Math.max(doneBtn.height, promoteBtn.height, taskLabel.implicitHeight, Style.space(22))
+            height: Math.max(doneBtn.height, promoteBtn.height, taskLabel.implicitHeight, editField.implicitHeight, Style.space(22))
 
             // Brief terminal-style "[ OK ]" tag before the row actually
             // leaves the active list.
@@ -298,7 +299,7 @@ Panel {
               visible: taskRow.modelData.id !== root.editingTaskId
               anchors.left: doneBtn.right
               anchors.leftMargin: Style.space(8)
-              anchors.right: promoteBtn.left
+              anchors.right: taskRow.index > 0 ? promoteBtn.left : parent.right
               anchors.rightMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
               text: taskRow.modelData.text
@@ -317,24 +318,34 @@ Panel {
               }
             }
 
-            TextField {
+            // Wraps instead of horizontally scrolling. A single-line field
+            // showing a long selected value tends to land scrolled to the
+            // end, hiding the start — wrapping sidesteps that entirely by
+            // keeping the whole task visible at once, matching how the
+            // read-only label above already wraps.
+            TextArea {
               id: editField
               visible: taskRow.modelData.id === root.editingTaskId
               anchors.left: doneBtn.right
               anchors.leftMargin: Style.space(8)
-              anchors.right: promoteBtn.left
+              anchors.right: taskRow.index > 0 ? promoteBtn.left : parent.right
               anchors.rightMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
               text: taskRow.modelData.text
-              foreground: root.bar.foreground
+              color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.subtitle
+              wrapMode: TextEdit.WordWrap
+              padding: 0
+              background: Item {}
 
               onVisibleChanged: if (visible) { forceActiveFocus(); selectAll() }
-              onAccepted: root.commitEditTask(taskRow.modelData.id, editField.text)
               Keys.onPressed: function(event) {
                 if (event.key === Qt.Key_Escape) {
                   root.cancelEditTask()
+                  event.accepted = true
+                } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
+                  root.commitEditTask(taskRow.modelData.id, editField.text)
                   event.accepted = true
                 }
               }
@@ -344,10 +355,17 @@ Panel {
               id: promoteBtn
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              iconText: "★"
+              iconText: "󰅃"
               tooltipText: "Move to top"
-              enabled: taskRow.index > 0
-              foreground: root.bar.foreground
+              // Hidden, not just disabled, when already on top — there's
+              // nothing for it to do (and "move #1 down" is the same end
+              // state as "promote #2", which already has its own button).
+              visible: taskRow.index > 0
+              // Dimmer at rest than the other action buttons — it's the
+              // least-reached-for one — but back to full brightness on
+              // hover so the click target still reads clearly.
+              foreground: Qt.darker(root.bar.foreground, 1.4)
+              hoverColor: root.bar.foreground
               onClicked: root.promoteTask(taskRow.modelData.id)
             }
           }
@@ -395,11 +413,12 @@ Panel {
             opacity: 0.6
             visible: root.done.length > 0
 
+            // One toggling line instead of two mutually-exclusive ones —
+            // only ever one of "[+] .../[-] ..." is visible at a time anyway.
             Text {
               textFormat: Text.PlainText
-              visible: !root.doneExpanded
               width: column.width
-              text: "[+] recently done (" + root.done.length + ")"
+              text: root.doneExpanded ? "[-] recently done" : "[+] recently done (" + root.done.length + ")"
               color: Qt.darker(root.bar.foreground, 1.6)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -407,23 +426,7 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.doneExpanded = true
-              }
-            }
-
-            Text {
-              visible: root.doneExpanded
-              width: column.width
-              textFormat: Text.PlainText
-              text: "[-] recently done"
-              color: Qt.darker(root.bar.foreground, 1.6)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.doneExpanded = false
+                onClicked: root.doneExpanded = !root.doneExpanded
               }
             }
 
@@ -468,7 +471,7 @@ Panel {
                   anchors.rightMargin: Style.space(4)
                   anchors.verticalCenter: parent.verticalCenter
                   size: Style.space(18)
-                  iconText: "↺"
+                  iconText: "󰑙"
                   tooltipText: root.atCap ? "No free slot" : "Restore to active"
                   enabled: !root.atCap
                   foreground: root.bar.foreground
@@ -493,25 +496,19 @@ Panel {
           }
         }
 
+        // No custom blink here — the field auto-focuses on open, so the
+        // real text cursor is doing that job already (and correctly, synced
+        // to actual typing). A second, independent blinking "_" was left
+        // over from before auto-focus existed and just fought the real one.
         TextField {
           id: input
-          property bool cursorOn: true
           width: column.width
           enabled: !root.atCap
-          placeholderText: root.atCap ? "Finish or remove one first" : "Add a task" + (cursorOn ? "_" : " ")
+          placeholderText: root.atCap ? "Finish or remove one first" : "Add a task"
           foreground: root.bar.foreground
           font.family: root.bar.fontFamily
 
           onAccepted: root.addTask()
-
-          // Idle terminal-prompt flavor — only runs while there's actually
-          // a blinking placeholder to animate, not once you're typing.
-          Timer {
-            interval: 500
-            repeat: true
-            running: input.text === "" && !root.atCap
-            onTriggered: input.cursorOn = !input.cursorOn
-          }
         }
       }
     }
