@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.hannoammermann.todays-top-3",
+  "name": "Today's Top 3",
+  "version": "0.1.0",
+  "author": "Hanno Ammermann",
+  "license": "MIT",
+  "description": "Bar widget for today's tasks, capped at three",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Today's Top 3",
+    "description": "Today's tasks, capped at three",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

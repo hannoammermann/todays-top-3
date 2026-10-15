@@ -1,0 +1,8 @@
+# Any local state ever accidentally copied in here — it should never be,
+# since real state lives at ~/.local/state/omarchy/, but this is a backstop.
+*.json.bak
+todays-top-3.json
+
+# Editor/OS cruft
+*.swp
+.DS_Store
