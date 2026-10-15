@@ -183,13 +183,14 @@ Panel {
     command: ["chmod", "600", root.statePath]
   }
 
+  // Not watched for external changes: only this plugin ever writes this
+  // file, so there's nothing to watch for — and watching would mean every
+  // one of our own writes triggers an immediate, unnecessary read-back.
   FileView {
     id: stateFile
     path: root.statePath
-    watchChanges: true
     atomicWrites: true
     printErrors: false
-    onFileChanged: reload()
     onLoaded: {
       var state = Model.parseState(text())
       root.tasks = state.tasks
@@ -268,17 +269,6 @@ Panel {
             required property int index
             width: column.width
             height: Math.max(doneBtn.height, promoteBtn.height, taskLabel.implicitHeight, editField.implicitHeight, Style.space(22))
-
-            // Brief terminal-style "[ OK ]" tag before the row actually
-            // leaves the active list.
-            FlashTag {
-              id: completeFlash
-              frames: ["[    ]", "[ .  ]", "[ .. ]", "[ OK ]"]
-              fontFamily: root.bar.fontFamily
-              fontSize: Style.font.body
-              idleColor: root.bar.foreground
-              onFinished: root.completeTask(taskRow.modelData.id)
-            }
 
             PanelActionButton {
               id: doneBtn
@@ -368,6 +358,20 @@ Panel {
               hoverColor: root.bar.foreground
               onClicked: root.promoteTask(taskRow.modelData.id)
             }
+
+            // Brief terminal-style "[ OK ]" tag before the row actually
+            // leaves the active list. Declared last so it paints on top of
+            // the row's other children — QtQuick stacks same-z siblings in
+            // declaration order, and this needs to cover everything above
+            // it while it's active, not sit behind it.
+            FlashTag {
+              id: completeFlash
+              frames: ["[    ]", "[ .  ]", "[ .. ]", "[ OK ]"]
+              fontFamily: root.bar.fontFamily
+              fontSize: Style.font.body
+              idleColor: root.bar.foreground
+              onFinished: root.completeTask(taskRow.modelData.id)
+            }
           }
         }
 
@@ -439,18 +443,6 @@ Panel {
                 width: column.width
                 height: Style.space(17)
 
-                // Mirrors the completion tag: restoring a task is the
-                // inverse of finishing one, so it gets the same brief
-                // terminal-tag treatment rather than snapping back silently.
-                FlashTag {
-                  id: restoreFlash
-                  frames: ["[    ]", "[ <  ]", "[ << ]"]
-                  fontFamily: root.bar.fontFamily
-                  fontSize: Style.font.bodySmall
-                  idleColor: root.bar.foreground
-                  onFinished: root.restoreTask(doneRow.modelData.id)
-                }
-
                 Text {
                   textFormat: Text.PlainText
                   anchors.left: parent.left
@@ -490,6 +482,21 @@ Panel {
                   tooltipText: "Clear"
                   foreground: root.bar.foreground
                   onClicked: root.clearDone(doneRow.modelData.id)
+                }
+
+                // Mirrors the completion tag: restoring a task is the
+                // inverse of finishing one, so it gets the same brief
+                // terminal-tag treatment rather than snapping back
+                // silently. Declared last so it paints on top of this
+                // row's other children while active, same reasoning as
+                // the completion tag above.
+                FlashTag {
+                  id: restoreFlash
+                  frames: ["[    ]", "[ <  ]", "[ << ]"]
+                  fontFamily: root.bar.fontFamily
+                  fontSize: Style.font.bodySmall
+                  idleColor: root.bar.foreground
+                  onFinished: root.restoreTask(doneRow.modelData.id)
                 }
               }
             }
