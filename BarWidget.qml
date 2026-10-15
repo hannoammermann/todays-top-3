@@ -58,22 +58,22 @@ BarWidget {
     text: ""
     labelVisible: false
     hasVisualContent: true
-    fixedWidth: Style.space(38)
+    fixedWidth: Style.space(26)
     tooltipText: root.tooltipText
 
     onPressed: function(b) { root.togglePanel() }
 
     Row {
       anchors.centerIn: parent
-      spacing: Style.space(4)
+      spacing: Style.space(2)
 
       Repeater {
         model: 3
 
         Rectangle {
           required property int index
-          width: Style.space(6)
-          height: Style.space(6)
+          width: Style.space(5)
+          height: Style.space(5)
           radius: width / 2
           color: button.foreground
           opacity: index < root.taskCount ? 1.0 : 0.3
