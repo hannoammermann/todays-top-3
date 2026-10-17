@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.hannoammermann.todays-top-3",
   "name": "Today's Top 3",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": "Hanno Ammermann",
   "license": "MIT",
   "description": "Todo list capped at 3 tasks, with a focus timer on the top one and a break reminder at 90 min. A calmer Pomodoro alternative.",

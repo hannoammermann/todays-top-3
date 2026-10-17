@@ -1,29 +1,14 @@
 # Today's Top 3
 
-**One thing at a time, three things a day.** An [Omarchy](https://omarchy.org/) status-bar widget that puts together what to-do and Pomodoro plugins usually keep apart:
+**Three things a day, one at a time.** An [Omarchy](https://omarchy.org/) bar widget for when your to-do list keeps winning.
 
-- **A hard cap of three tasks.** No backlog. A fourth can't be added until you finish or park one.
-- **A timer on the top task only.** Starting work means putting that task first, so priority and focus are the same decision.
-- **A break signal after 90 minutes of focus.** The bar turns red, and only a real 5-minute break resets it. No 25-minute cycles to babysit; it follows how long you actually work.
+- **Three slots, no backlog.** Long lists feel productive and get little done. With three, every new task has to earn its place.
+- **The timer only runs on #1.** To work on something, put it first. Choosing and focusing become the same decision.
+- **A nudge after 90 minutes.** The bar turns red when it's time to step away. Take as long as you need; anything under 5 minutes doesn't count as a break.
 
 All of it lives in three dots in your bar. No chat, no Eisenhower matrix, no network.
 
 ![Today's Top 3 popover with three sample tasks, the top one timing at 1h 15m with a pause button, the add field disabled at the 3-task cap, and a footer showing today's 3h 12m alongside parked 1 · done 2](preview.png)
-
-## Why this combination
-
-- **The cap forces the tradeoff.** A list that can always grow never makes you choose. With three slots, adding something means deciding what it replaces, instead of letting the list pile up the way every other to-do app does.
-- **The timer enforces the order.** Most timers run next to your list, not on it. Here only the top task can be timed, so you can't drift onto task #3 while telling yourself #1 is the priority. Switching means promoting it, on purpose.
-- **The break signal protects the focus.** A 25-minute Pomodoro can cut a deep-work stretch short. One signal at 90 minutes lets you finish a thought and still makes you stop, and short pauses don't count as a break.
-
-## The thinking behind it
-
-These are research-informed defaults, not proven numbers. How solid each one is:
-
-- **One thing at a time: strong evidence.** Switching between tasks costs time and accuracy ([Rubinstein, Meyer & Evans, 2001](https://doi.org/10.1037/0096-1523.27.4.763)), and part of your attention stays on the task you just left, called attention residue ([Leroy, 2009](https://doi.org/10.1016/j.obhdp.2009.04.002)).
-- **Short breaks: good evidence.** A meta-analysis of breaks of 10 minutes or less found they reliably reduce fatigue and boost energy, with smaller effects on performance ([Albulescu et al., 2022](https://doi.org/10.1371/journal.pone.0272460)).
-- **90 minutes: plausible, not proven.** It comes from Nathaniel Kleitman's basic rest-activity cycle, the idea that the ~90-minute rhythm of sleep continues through the day. That rhythm is well established during sleep, but the evidence while awake is mixed. Treat 90 as a sensible ceiling, not a biological law.
-- **Three tasks: a heuristic.** No study says "three". It follows the "most important tasks" habit and the small capacity of working memory ([Cowan, 2001](https://doi.org/10.1017/S0140525X01003922)): few enough to hold in your head, enough to make real progress.
 
 ## What it does
 
