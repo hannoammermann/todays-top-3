@@ -200,9 +200,11 @@ Panel {
     onTriggered: root.parkedExpanded = false
   }
 
-  function promoteTask(id) {
-    if (root.timer) root.stopTimer(Date.now())
-    root.tasks = Model.promoteTask(root.tasks, id)
+  // The timer belongs to the top task, so it only stops when the move
+  // actually changes which task is on top.
+  function moveTaskUp(id) {
+    if (root.timer && root.tasks.length > 1 && root.tasks[1].id === id) root.stopTimer(Date.now())
+    root.tasks = Model.moveTaskUp(root.tasks, id)
     persist()
   }
 
@@ -519,7 +521,7 @@ Panel {
             required property var modelData
             required property int index
             width: column.width
-            height: Math.max(doneBtn.height, promoteBtn.height, textColumn.implicitHeight, Style.space(22))
+            height: Math.max(doneBtn.height, upBtn.height, textColumn.implicitHeight, Style.space(22))
 
             readonly property bool isRunning: root.timer !== null && root.timer.taskId === modelData.id
 
@@ -615,7 +617,7 @@ Panel {
             // reserved so the task text never reflows under the mouse.
             PanelActionButton {
               id: parkBtn
-              anchors.right: taskRow.index > 0 ? promoteBtn.left : playBtn.left
+              anchors.right: taskRow.index > 0 ? upBtn.left : playBtn.left
               anchors.rightMargin: Style.space(2)
               anchors.verticalCenter: parent.verticalCenter
               opacity: rowHover.hovered && root.editingTaskId !== taskRow.modelData.id ? 1 : 0
@@ -641,21 +643,21 @@ Panel {
             }
 
             PanelActionButton {
-              id: promoteBtn
+              id: upBtn
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               iconText: "󰅃"
-              tooltipText: "Move to top"
+              tooltipText: "Move up"
               // Hidden, not just disabled, when already on top — there's
               // nothing for it to do (and "move #1 down" is the same end
-              // state as "promote #2", which already has its own button).
+              // state as "move #2 up", which already has its own button).
               visible: taskRow.index > 0
               // Dimmer at rest than the other action buttons — it's the
               // least-reached-for one — but back to full brightness on
               // hover so the click target still reads clearly.
               foreground: Qt.darker(root.bar.foreground, 1.4)
               hoverColor: root.bar.foreground
-              onClicked: root.promoteTask(taskRow.modelData.id)
+              onClicked: root.moveTaskUp(taskRow.modelData.id)
             }
 
             // Brief terminal-style "[ OK ]" tag before the row actually

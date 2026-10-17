@@ -178,15 +178,15 @@ function clearParked(parked, id) {
   return parked.filter(function(p) { return p.id !== id })
 }
 
-// Priority is just list order. Promoting moves a task to the front rather
-// than swapping neighbors, so any order is reachable in at most two clicks
-// with a 3-item list.
-function promoteTask(tasks, id) {
+// Priority is just list order. Moving up swaps a task with the one directly
+// above it, one step at a time.
+function moveTaskUp(tasks, id) {
   var index = tasks.findIndex(function(t) { return t.id === id })
   if (index <= 0) return tasks
   var copy = tasks.slice()
-  var item = copy.splice(index, 1)[0]
-  copy.unshift(item)
+  var above = copy[index - 1]
+  copy[index - 1] = copy[index]
+  copy[index] = above
   return copy
 }
 
