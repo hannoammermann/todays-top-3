@@ -2,7 +2,7 @@
 
 An [Omarchy](https://omarchy.org/) status-bar widget for a daily task list capped at three active items on purpose. No backlog, no chat, no Eisenhower matrix — just three slots, a quick-add field, a focus timer for the top task, and a terminal-flavored completion animation.
 
-![Today's Top 3 popover showing three active tasks, a collapsed "recently done" line, and the add field disabled at the 3-task cap](preview.png)
+![Today's Top 3 popover with three sample tasks, the top one timing at 1h 15m with a pause button, the add field disabled at the 3-task cap, and a footer showing today's 3h 12m alongside parked 1 · done 2](preview.png)
 
 ## Why capped at 3
 
