@@ -280,7 +280,9 @@ Panel {
   // Belt-and-suspenders: the containing directory is already 700, so
   // nothing can reach this file without going through it first. This just
   // keeps the file's own mode tight too, re-applied after every write since
-  // atomic writes replace the file (and its mode) each time.
+  // atomic writes replace the file (and its mode) each time. Triggered from
+  // onSaved rather than right after setText: the write lands asynchronously,
+  // so an immediate chmod could miss a file that didn't exist yet.
   Process {
     id: chmodFileProc
     command: ["chmod", "600", root.statePath]
@@ -308,6 +310,7 @@ Panel {
     printErrors: false
     watchChanges: true
     onFileChanged: reload()
+    onSaved: chmodFileProc.running = true
     onLoaded: {
       var raw = text()
       if (raw === root.lastStateText) return
@@ -316,7 +319,13 @@ Panel {
       root.assignIfChanged("tasks", state.tasks)
       root.assignIfChanged("done", state.done)
       root.assignIfChanged("parked", state.parked)
-      root.assignIfChanged("timer", state.timer)
+      // Another screen's copy only knows the heartbeat from disk, so its
+      // writes can carry an older one. Keep the newest for the same session,
+      // or the gap would look like sleep and end a timer that's still going.
+      var t = state.timer
+      if (t && root.timer && t.taskId === root.timer.taskId && t.startedAt === root.timer.startedAt)
+        t.lastBeat = Math.max(t.lastBeat, root.timer.lastBeat)
+      root.assignIfChanged("timer", t)
       root.assignIfChanged("streak", state.focus)
     }
     onLoadFailed: {
@@ -332,6 +341,7 @@ Panel {
     printErrors: false
     watchChanges: true
     onFileChanged: reload()
+    onSaved: chmodHistoryProc.running = true
     onLoaded: {
       var raw = text()
       if (raw === root.lastHistoryText) return
@@ -347,7 +357,6 @@ Panel {
     onTriggered: {
       root.lastStateText = Model.serializeState(root.tasks, root.done, root.parked, root.timer, root.streak)
       stateFile.setText(root.lastStateText)
-      chmodFileProc.running = true
     }
   }
 
@@ -362,7 +371,6 @@ Panel {
     onTriggered: {
       root.lastHistoryText = Model.serializeHistory(root.days)
       historyFile.setText(root.lastHistoryText)
-      chmodHistoryProc.running = true
     }
   }
 
