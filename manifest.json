@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "id": "io.github.hannoammermann.todays-top-3",
   "name": "Today's Top 3",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Hanno Ammermann",
   "license": "MIT",
-  "description": "Bar widget for today's tasks, capped at three",
+  "description": "Todo list capped at 3 tasks, with a focus timer on the top one and a break reminder at 90 min. A calmer Pomodoro alternative.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Today's Top 3",
-    "description": "Today's tasks, capped at three",
+    "description": "Todo list capped at 3, with a focus timer and 90-minute break reminder",
     "category": "Productivity",
     "allowMultiple": false,
     "defaultSection": "center"

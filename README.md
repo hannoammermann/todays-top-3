@@ -1,17 +1,34 @@
 # Today's Top 3
 
-An [Omarchy](https://omarchy.org/) status-bar widget for a daily task list capped at three active items on purpose. No backlog, no chat, no Eisenhower matrix — just three slots, a quick-add field, a focus timer for the top task, and a terminal-flavored completion animation.
+**One thing at a time, three things a day.** An [Omarchy](https://omarchy.org/) status-bar widget that puts together what to-do and Pomodoro plugins usually keep apart:
+
+- **A hard cap of three tasks.** No backlog. A fourth can't be added until you finish or park one.
+- **A timer on the top task only.** Starting work means putting that task first, so priority and focus are the same decision.
+- **A break signal after 90 minutes of focus.** The bar turns red, and only a real 5-minute break resets it. No 25-minute cycles to babysit; it follows how long you actually work.
+
+All of it lives in three dots in your bar. No chat, no Eisenhower matrix, no network.
 
 ![Today's Top 3 popover with three sample tasks, the top one timing at 1h 15m with a pause button, the add field disabled at the 3-task cap, and a footer showing today's 3h 12m alongside parked 1 · done 2](preview.png)
 
-## Why capped at 3
+## Why this combination
 
-A fourth task doesn't get queued — it can't be added until you finish, drop, or reorder one of the existing three. The cap is the feature: it forces the tradeoff decision instead of letting the list grow the way every other to-do app does.
+- **The cap forces the tradeoff.** A list that can always grow never makes you choose. With three slots, adding something means deciding what it replaces, instead of letting the list pile up the way every other to-do app does.
+- **The timer enforces the order.** Most timers run next to your list, not on it. Here only the top task can be timed, so you can't drift onto task #3 while telling yourself #1 is the priority. Switching means promoting it, on purpose.
+- **The break signal protects the focus.** A 25-minute Pomodoro can cut a deep-work stretch short. One signal at 90 minutes lets you finish a thought and still makes you stop, and short pauses don't count as a break.
+
+## The thinking behind it
+
+These are research-informed defaults, not proven numbers. How solid each one is:
+
+- **One thing at a time: strong evidence.** Switching between tasks costs time and accuracy ([Rubinstein, Meyer & Evans, 2001](https://doi.org/10.1037/0096-1523.27.4.763)), and part of your attention stays on the task you just left, called attention residue ([Leroy, 2009](https://doi.org/10.1016/j.obhdp.2009.04.002)).
+- **Short breaks: good evidence.** A meta-analysis of breaks of 10 minutes or less found they reliably reduce fatigue and boost energy, with smaller effects on performance ([Albulescu et al., 2022](https://doi.org/10.1371/journal.pone.0272460)).
+- **90 minutes: plausible, not proven.** It comes from Nathaniel Kleitman's basic rest-activity cycle, the idea that the ~90-minute rhythm of sleep continues through the day. That rhythm is well established during sleep, but the evidence while awake is mixed. Treat 90 as a sensible ceiling, not a biological law.
+- **Three tasks: a heuristic.** No study says "three". It follows the "most important tasks" habit and the small capacity of working memory ([Cowan, 2001](https://doi.org/10.1017/S0140525X01003922)): few enough to hold in your head, enough to make real progress.
 
 ## What it does
 
 - **Bar**: three pips (●●○) — filled slots vs. free ones. No task text, no variable width. Hover for a tooltip ("Today — 2 of 3", or the running task and its time). The pips only change colour when something needs you — see *Focus timer*.
-- **Add**: type and hit Enter. Disabled with an explanatory placeholder once you're at 3 — finish or remove one first, there's no overflow list to dump a 4th into.
+- **Add**: type and hit Enter. Disabled with an explanatory placeholder once you're at 3 — finish or park one first, there's no overflow list to dump a 4th into.
 - **Complete**: ✓ plays a brief terminal-style `[ OK ]` tag before the task leaves the list.
 - **Reorder**: an up-chevron promotes any task to the top (any order is reachable in at most two clicks with 3 items). The top task doesn't get a dead, do-nothing button — the control is simply absent, not disabled.
 - **Edit**: click a task's text to edit it in place. The field wraps like the display text does, so a two-line task is fully visible while you edit it instead of scrolling.
