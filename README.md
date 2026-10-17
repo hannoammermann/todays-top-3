@@ -35,13 +35,35 @@ Time stats live next to it in `todays-top-3-history.json` (also `600`) as daily 
 
 ## Install
 
-Clone or symlink this repo into `~/.config/omarchy/plugins/todays-top-3/`, then:
-
 ```bash
-omarchy plugin enable io.github.hannoammermann.todays-top-3
+omarchy plugin add https://github.com/hannoammermann/todays-top-3.git --enable
 ```
 
-Place it in your bar via `~/.config/omarchy/shell.json`'s `bar.layout` section, or `omarchy bar move`.
+Or clone this repo into `~/.config/omarchy/plugins/todays-top-3/` yourself and run `omarchy plugin enable io.github.hannoammermann.todays-top-3`. Move it around the bar with `omarchy bar move`, or via `bar.layout` in `~/.config/omarchy/shell.json`.
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.hannoammermann.todays-top-3
+```
+
+That removes the plugin itself. Your tasks and time history stay behind in case you reinstall; to delete them too:
+
+```bash
+rm ~/.local/state/omarchy/todays-top-3.json ~/.local/state/omarchy/todays-top-3-history.json
+```
+
+The plugin never edits your shell or Hyprland config.
+
+## Dependencies and permissions
+
+Nothing to install beyond a standard Omarchy setup. Like all Omarchy plugins it runs unsandboxed as your user; this is everything it touches:
+
+- Reads and writes only the two state files above.
+- Runs `omarchy-shell lock isLocked` every 10 seconds while a timer is running, to pause when the screen locks.
+- Runs `notify-send` (libnotify, included with Omarchy) once when you reach 90 minutes of focus.
+- Uses Wayland idle notifications (`ext-idle-notify`, supported by Hyprland) for the "back but paused" hint.
+- Reads the current theme's `colors.toml` for the amber colour.
 
 ## License
 

@@ -2,6 +2,7 @@
 # since real state lives at ~/.local/state/omarchy/, but this is a backstop.
 *.json.bak
 todays-top-3.json
+todays-top-3-history.json
 
 # Editor/OS cruft
 *.swp
