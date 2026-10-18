@@ -437,7 +437,7 @@ Panel {
   // (sitting still reading for five minutes is still work).
   Process {
     id: lockCheckProc
-    command: ["omarchy-shell", "-q", "lock", "isLocked"]
+    command: ["omarchy-shell", "lock", "isLocked"]
     stdout: StdioCollector {
       onStreamFinished: {
         if (text.trim() === "true" && root.timer) root.stopTimer(Date.now())
