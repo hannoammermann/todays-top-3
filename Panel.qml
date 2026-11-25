@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -665,20 +666,36 @@ Panel {
               HoverHandler { id: rowHover }
               readonly property bool showHoverActions: rowHover.hovered && root.editingTaskId !== taskBlock.modelData.id
 
+              // Each task sits in its numbered slot; #1 is outlined in the
+              // accent colour.
               Rectangle {
                 anchors.fill: parent
-                anchors.margins: -Style.space(4)
-                visible: root.planMode
+                anchors.margins: -Style.space(5)
                 radius: Style.space(5)
                 color: "transparent"
                 border.width: 1
-                border.color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.25)
+                border.color: taskBlock.isTop
+                  ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.55)
+                  : Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.22)
+              }
+
+              // The slot number; hovering the row turns it into ✓ Done.
+              Text {
+                anchors.horizontalCenter: doneBtn.horizontalCenter
+                anchors.verticalCenter: doneBtn.verticalCenter
+                visible: !rowHover.hovered
+                text: String(taskBlock.index + 1)
+                color: taskBlock.isTop ? root.accent : root.dimText
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
               }
 
               PanelActionButton {
                 id: doneBtn
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
+                opacity: rowHover.hovered ? 1 : 0
                 iconText: "✓"
                 tooltipText: "Done"
                 foreground: root.bar.foreground
@@ -901,32 +918,46 @@ Panel {
           }
         }
 
-        // Free slots, so an empty one reads as a place to fill.
+        // Free slots: dashed numbered boxes, so an empty one reads as a
+        // place to fill.
         Repeater {
-          // Only while planning; while doing, an empty slot is just quiet.
-          model: root.planMode && !root.settingsOpen ? Math.max(0, Model.TODAY_CAP - root.tasks.length) : 0
+          model: root.settingsOpen ? 0 : Math.max(0, Model.TODAY_CAP - root.tasks.length)
 
           Item {
+            id: freeSlot
             required property int index
             width: column.width
-            height: Style.space(22)
+            height: Style.space(24)
 
-            Rectangle {
-              anchors.fill: parent
-              anchors.margins: -Style.space(4)
-              visible: root.planMode
-              radius: Style.space(5)
-              color: "transparent"
-              border.width: 1
-              border.color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.12)
+            Shape {
+              x: -Style.space(5)
+              y: -Style.space(5)
+              width: freeSlot.width + Style.space(10)
+              height: freeSlot.height + Style.space(10)
+              preferredRendererType: Shape.CurveRenderer
+
+              ShapePath {
+                strokeWidth: 1
+                strokeColor: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.22)
+                strokeStyle: ShapePath.DashLine
+                dashPattern: [4, 3]
+                fillColor: "transparent"
+                PathRectangle {
+                  x: 0.5
+                  y: 0.5
+                  width: freeSlot.width + Style.space(10) - 1
+                  height: freeSlot.height + Style.space(10) - 1
+                  radius: Style.space(5)
+                }
+              }
             }
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              leftPadding: Style.space(6)
-              text: root.planMode ? (root.tasks.length + parent.index + 1) + "    empty" : "○   ·  ·  ·"
-              color: Qt.darker(root.bar.foreground, 2.2)
+              leftPadding: Style.space(9)
+              text: (root.tasks.length + freeSlot.index + 1) + "     empty"
+              color: Qt.darker(root.bar.foreground, 2.0)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
             }
