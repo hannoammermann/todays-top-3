@@ -2,19 +2,37 @@
   "schemaVersion": 1,
   "id": "io.github.hannoammermann.todays-top-3",
   "name": "Today's Top 3",
-  "version": "0.2.3",
+  "version": "0.4.0",
   "author": "Hanno Ammermann",
   "license": "MIT",
-  "description": "Todo list capped at 3 tasks, with a focus timer on the top one and a break reminder at 90 min. A calmer Pomodoro alternative.",
-  "kinds": ["bar-widget"],
+  "description": "Three tasks for today with steps, a Later list you can always capture into (important, later, ideas), and a small dot map of finished days. Optional sync through a markdown note.",
+  "kinds": [
+    "bar-widget"
+  ],
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Today's Top 3",
-    "description": "Todo list capped at 3, with a focus timer and 90-minute break reminder",
+    "description": "Three tasks for today, a Later list, and a dot map of finished days",
     "category": "Productivity",
     "allowMultiple": false,
-    "defaultSection": "center"
+    "defaultSection": "center",
+    "schema": [
+      {
+        "key": "syncNote",
+        "type": "boolean",
+        "label": "Sync with a note",
+        "defaultValue": false,
+        "description": "Keep Today, Later and the Done log in a markdown file of your choice, e.g. inside a notes vault or a synced folder, so they reach your other devices."
+      },
+      {
+        "key": "notePath",
+        "type": "path",
+        "label": "Note file",
+        "defaultValue": "",
+        "description": "Path to the .md file, e.g. ~/Notes/Top 3.md. Created if missing."
+      }
+    ]
   }
 }

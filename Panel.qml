@@ -16,53 +16,65 @@ Panel {
   property var hostWidget: null
   readonly property var barIdentity: hostWidget || root
 
+  // Today (max 3), Later (anything you want out of your head), and today's
+  // finished tasks, which stay on view crossed out until midnight but don't
+  // take a slot. The lists live in a markdown note; see "Storage".
   property var tasks: []
+  property var later: []
   property var done: []
-  property var parked: []
-  readonly property bool atCap: tasks.length >= 3
-  readonly property bool parkFull: parked.length >= Model.PARK_CAP
+  readonly property bool atCap: tasks.length >= Model.TODAY_CAP
 
-  // The running session (always the top task) or null, the current focus
-  // streak, and per-day totals for the stats line. See Model.js "Timer".
-  property var timer: null
-  property var streak: Model.emptyFocus()
-  property var days: ({})
-  readonly property bool running: timer !== null
+  // The note's parts the panel doesn't show: text above the first heading
+  // and the Done log.
+  property var notePreamble: []
+  property var log: []
 
-  // Wall clock for everything time-based, advanced by the heartbeat. Ten
-  // seconds is plenty: the panel only ever shows whole minutes.
+  // Tasks finished per day, for the dot strip.
+  property var doneCounts: ({})
+
+  // Wall clock for the day boundary and age labels, refreshed on open.
   property real now: Date.now()
 
-  readonly property int todaySeconds: Model.periodSeconds(days, timer, "today", now)
-  readonly property bool breakDue: Model.focusSeconds(timer, streak, now) >= Model.FOCUS_LIMIT_SECONDS
+  readonly property var strip: Model.dotStrip(Model.withToday(doneCounts, done.length, now), now)
 
-  // "You're back, but the timer is paused": a real break already happened,
-  // you've been at the keyboard for a couple of minutes since, and you'd
-  // timed something earlier today. Opening the panel counts as having seen
-  // it, so it never nags through an afternoon of deliberate other work.
-  property real activeSince: 0
-  readonly property bool nudge: !running
-    && tasks.length > 0
-    && todaySeconds > 0
-    && Model.breakTaken(timer, streak, now)
-    && !streak.nudgeDismissed
-    && activeSince > 0
-    && now - activeSince >= Model.NUDGE_ACTIVE_MS
-
-  property int statsPeriodIndex: 0
-  readonly property string statsPeriod: Model.PERIODS[statsPeriodIndex]
-
-  // Id of the task currently being edited in place, or "" for none. Only
-  // one row edits at a time; switching to a different row while one is open
-  // abandons the unsaved edit rather than auto-committing it.
+  // Id of the task currently being edited in place, or "" for none.
   property string editingTaskId: ""
 
-  // Collapsed by default — the done list costs nothing visually until you
-  // actually click to see it. Persists for the shell session (not reset on
-  // close/reopen); there's no need to force it shut again once you've
-  // chosen to look.
-  property bool doneExpanded: false
-  property bool parkedExpanded: false
+  // Later sits under Today while there's a free slot (that's when you pick
+  // from it); with Today full it folds behind "later N" in the footer.
+  property bool laterExpanded: false
+  readonly property bool laterVisible: later.length > 0 && (!atCap || laterExpanded)
+  readonly property int laterShown: 8
+
+  // Brief confirmation in the input after a capture.
+  property string inputHint: ""
+
+  // "+ step" puts the input into step mode for that task: Enter adds a step
+  // instead of a task, Esc goes back to normal.
+  property string stepTargetId: ""
+  readonly property var stepTarget: root.tasks.find(function(t) { return t.id === root.stepTargetId }) || null
+
+  // One-time tip about the keyboard shortcut, dismissible with ✕.
+  property bool tipDismissed: false
+  property string shortcutLabel: ""
+
+  property bool settingsOpen: false
+
+  // Plan stage: at the start of the day (nothing timed or finished yet)
+  // with a free slot, the panel is about picking the day — boxed slots and
+  // Later right below. Once the day gets going it's about doing; a slot
+  // that frees up later just shows Later underneath, without the plan header.
+  readonly property bool dayFresh: done.length === 0
+  readonly property bool planMode: !atCap && dayFresh
+
+  // Today's finished tasks stay out of the way behind one line.
+  property bool doneAllShown: false
+  readonly property int doneShownCount: doneAllShown ? done.length : 0
+  readonly property var laterGroups: Model.laterGroups(later)
+  // Ideas don't count as waiting work.
+  readonly property int laterTaskCount: laterGroups.important.length + laterGroups.normal.length
+  property bool ideasExpanded: false
+  readonly property bool laterHasQuick: later.some(function(t) { return Model.groupOf(t) !== "ideas" && Model.isQuick(t.text) })
 
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
@@ -70,141 +82,161 @@ Panel {
     return false
   }
 
+  function flashHint(text) {
+    root.inputHint = text
+    hintTimer.restart()
+  }
+
+  Timer {
+    id: hintTimer
+    interval: 1800
+    onTriggered: root.inputHint = ""
+  }
+
+  // Typing is never blocked: with Today full, Enter files the text under
+  // Later instead, so a thought can be written down and let go of right away.
   function addTask() {
-    if (root.atCap) return
-    var next = Model.addTask(root.tasks, input.text)
-    if (next === root.tasks) return
+    if (root.stepTarget) {
+      root.addStepTo(root.stepTargetId)
+      return
+    }
+    var item = Model.newItem(input.text)
+    if (!item) return
+    if (root.atCap) {
+      root.later = [item].concat(root.later)
+      root.flashHint("Saved to Later ✓")
+    } else {
+      root.tasks = root.tasks.concat([item])
+    }
+    input.text = ""
+    persist()
+  }
+
+  // Tab in the input (or Enter in step mode) adds the text as a step.
+  function addStep() {
+    if (root.tasks.length === 0) return
+    root.addStepTo(root.tasks[0].id)
+  }
+
+  function addStepTo(id) {
+    var next = Model.addStep(root.tasks, id, input.text)
+    if (!next) {
+      if (String(input.text).trim() !== "") root.flashHint("Up to " + Model.STEP_CAP + " steps per task")
+      return
+    }
     root.tasks = next
     input.text = ""
     persist()
   }
 
-  // "All clear" types itself out, but only at the moment the last active
-  // task is cleared — not every time the panel happens to load into an
-  // already-empty state (e.g. reopening later the same day).
-  property bool allClearRevealing: false
-  property int allClearRevealIndex: 0
-  readonly property string allClearFullText: "All clear ✓"
-
-  function startAllClearReveal() {
-    root.allClearRevealing = true
-    root.allClearRevealIndex = 0
-    allClearRevealTimer.restart()
+  function startStepMode(id) {
+    root.stepTargetId = id
+    input.forceActiveFocus()
   }
 
-  Timer {
-    id: allClearRevealTimer
-    interval: 40
-    repeat: true
-    onTriggered: {
-      if (root.allClearRevealIndex < root.allClearFullText.length) {
-        root.allClearRevealIndex = root.allClearRevealIndex + 1
-      } else {
-        allClearRevealTimer.stop()
-        root.allClearRevealing = false
+  function dismissTip() {
+    root.tipDismissed = true
+    saveStateSoon()
+  }
+
+  // Settings live in the shell's own config (the same values as the
+  // widget's settings form), written through the omarchy CLI.
+  function setSetting(key, value, isJson) {
+    settingProc.command = ["omarchy", "bar", "set", root.moduleName, key, String(value)].concat(isJson ? ["--json"] : [])
+    settingProc.running = true
+  }
+
+  Process {
+    id: settingProc
+  }
+
+  // Finds the key bound to this panel, if any, for the tip.
+  Process {
+    id: bindProc
+    command: ["hyprctl", "binds", "-j"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var hit = JSON.parse(text).find(function(b) {
+            return /today'?s top 3|todays-top-3/i.test(String(b.description || "") + " " + String(b.arg || ""))
+          })
+          root.shortcutLabel = hit ? Model.formatBind(hit.modmask, hit.key) : ""
+        } catch (e) {
+          root.shortcutLabel = ""
+        }
       }
     }
   }
 
-  function toggleTimer() {
-    if (root.running) root.stopTimer(Date.now())
-    else root.startTimer()
-  }
-
-  function startTimer() {
-    var n = Date.now()
-    var next = Model.startSession(root.tasks, root.timer, root.streak, n)
-    if (!next) return
-    root.now = n
-    root.timer = next.timer
-    root.streak = next.focus
+  function toggleStep(id, index) {
+    root.tasks = Model.toggleStep(root.tasks, id, index)
     persist()
   }
 
-  // `end` is the last moment known to be work: now for a pause or lock, the
-  // last heartbeat after sleep or a crash.
-  function stopTimer(end) {
-    if (!root.timer) return
-    var next = Model.stopSession(root.tasks, root.days, root.timer, root.streak, end)
-    root.now = Date.now()
+  function removeStep(id, index) {
+    root.tasks = Model.removeStep(root.tasks, id, index)
+    persist()
+  }
+
+  // Focus on this: straight to the top. Order is the priority, and this
+  // is the only way to change it, for "the important one now" as much as
+  // "an easy one first to get going".
+  function makeTop(id) {
+    root.tasks = Model.moveToTop(root.tasks, id)
+    persist()
+  }
+
+  function completeTask(id) {
+    var next = Model.completeTask(root.tasks, root.done, id)
+    if (!next) return
     root.tasks = next.tasks
-    root.days = next.days
-    root.timer = null
-    root.streak = next.focus
+    root.done = next.done
+    root.log = Model.addLog(root.log, next.task.text, Date.now(), Model.stepsDone(next.task))
+    root.doneCounts = Model.bumpDone(root.doneCounts, Date.now(), 1)
     persist()
     persistHistory()
   }
 
-  function completeTask(id) {
-    if (root.timer && root.timer.taskId === id) root.stopTimer(Date.now())
-    var hadActiveTasks = root.tasks.length > 0
-    var next = Model.completeTask(root.tasks, root.done, id)
-    root.tasks = next.tasks
-    root.done = next.done
-    persist()
-    if (hadActiveTasks && root.tasks.length === 0) root.startAllClearReveal()
-  }
-
-  function clearDone(id) {
-    root.done = Model.clearDone(root.done, id)
-    persist()
-  }
-
+  // Undo: clicking a crossed-out task puts it back (needs a free slot).
   function restoreTask(id) {
     var next = Model.restoreTask(root.tasks, root.done, id)
+    if (!next) return
     root.tasks = next.tasks
     root.done = next.done
+    root.log = Model.removeLog(root.log, next.entry.text, next.entry.completedAt)
+    root.doneCounts = Model.bumpDone(root.doneCounts, next.entry.completedAt, -1)
     persist()
-    // Once you've acted on the done list, it's served its purpose for this
-    // visit — fold it back away after a beat rather than leaving it expanded
-    // indefinitely.
-    doneCollapseTimer.restart()
+    persistHistory()
   }
 
-  Timer {
-    id: doneCollapseTimer
-    interval: 2200
-    repeat: false
-    onTriggered: root.doneExpanded = false
-  }
-
-  // Switching tasks is deliberate: the old one pauses and the new top task
-  // waits for its own play press, so reordering never silently logs time.
-  // Parking the running task pauses it, same as moving it off the top.
-  function parkTask(id) {
-    if (root.parkFull) return
-    if (root.timer && root.timer.taskId === id) root.stopTimer(Date.now())
-    var next = Model.parkTask(root.tasks, root.parked, id)
+  function toLater(id) {
+    var next = Model.moveToLater(root.tasks, root.later, id)
+    if (!next) return
     root.tasks = next.tasks
-    root.parked = next.parked
+    root.later = next.later
     persist()
   }
 
-  function unparkTask(id) {
-    var next = Model.unparkTask(root.tasks, root.parked, id)
+  function pullFromLater(id) {
+    var next = Model.pullFromLater(root.tasks, root.later, id)
+    if (!next) return
     root.tasks = next.tasks
-    root.parked = next.parked
-    persist()
-    parkedCollapseTimer.restart()
-  }
-
-  function clearParked(id) {
-    root.parked = Model.clearParked(root.parked, id)
+    root.later = next.later
     persist()
   }
 
-  Timer {
-    id: parkedCollapseTimer
-    interval: 2200
-    repeat: false
-    onTriggered: root.parkedExpanded = false
+  function toggleLaterGroup(id, group) {
+    root.later = Model.toggleGroup(root.later, id, group)
+    persist()
   }
 
-  // The timer belongs to the top task, so it only stops when the move
-  // actually changes which task is on top.
-  function moveTaskUp(id) {
-    if (root.timer && root.tasks.length > 1 && root.tasks[1].id === id) root.stopTimer(Date.now())
-    root.tasks = Model.moveTaskUp(root.tasks, id)
+  function toggleLaterQuick(id) {
+    root.later = Model.toggleQuick(root.later, id)
+    persist()
+  }
+
+  function dropLater(id) {
+    root.later = Model.removeItem(root.later, id)
     persist()
   }
 
@@ -217,44 +249,39 @@ Panel {
   }
 
   function commitEditTask(id, text) {
-    root.tasks = Model.updateTaskText(root.tasks, id, text)
+    root.tasks = Model.updateText(root.tasks, id, text)
     root.editingTaskId = ""
     persist()
   }
 
-  // Cheap safety net: a completed task is only ever removed from the done
-  // log when read/written (parseState, this check), so a shell that runs for
-  // days without this would keep stale entries past midnight. The scan
-  // itself is never more than 3 items, so this is a filter, not a background job.
-  function pruneExpiredDone() {
+  // Done entries leave the panel at midnight and the note's log after a
+  // month. Checked on open and every half hour; both lists are tiny.
+  function pruneExpired() {
     var pruned = Model.pruneDone(root.done)
-    if (pruned.length !== root.done.length) {
+    var prunedLog = Model.pruneLog(root.log, Date.now())
+    if (pruned.length !== root.done.length || prunedLog.length !== root.log.length) {
       root.done = pruned
+      root.log = prunedLog
       persist()
     }
   }
 
-  // Closing mid-edit abandoned the draft anyway (editField's binding isn't
-  // committed), so reopening should show the clean read-only row, not a
-  // stale edit field for a task that no longer matches what's on screen.
-  //
   // The double Qt.callLater on focus is deliberate: KeyboardPanel primes its
   // own focusTarget (keyCatcher) via a single deferred call on this same
-  // open transition. Qt.callLater runs callbacks in the order they were
-  // scheduled, so nesting ours inside a second deferred call guarantees it
-  // lands after that one and actually wins, rather than racing it.
+  // open transition, and ours has to land after it.
   onOpenedChanged: {
     if (root.opened) {
-      root.pruneExpiredDone()
+      root.pruneExpired()
       root.now = Date.now()
-      root.statsPeriodIndex = 0
-      if (root.nudge) {
-        root.streak = Object.assign({}, root.streak, { nudgeDismissed: true })
-        persist()
-      }
+      root.laterExpanded = false
+      root.settingsOpen = false
+      root.doneAllShown = false
+      root.ideasExpanded = false
+      root.stepTargetId = ""
+      if (!root.tipDismissed && !bindProc.running) bindProc.running = true
       Qt.callLater(function() {
         Qt.callLater(function() {
-          if (root.opened && !root.atCap) input.forceActiveFocus()
+          if (root.opened) input.forceActiveFocus()
         })
       })
     } else {
@@ -262,47 +289,93 @@ Panel {
     }
   }
 
-  function persist() {
-    saveTimer.restart()
+  // ---- Storage -------------------------------------------------------------
+  //
+  // Two files:
+  // - The note (markdown): Today, Later and a Done log. By default it sits
+  //   privately next to the other state. The "Sync with a note" setting
+  //   points it at a file in any synced folder (a notes vault, Syncthing,
+  //   Dropbox), which is how the lists reach other devices.
+  // - todays-top-3.json: what only this machine needs (today's done list,
+  //   each item's id and day added, whether the tip was dismissed).
+  //
+  // Both are watched because the bar exists once per screen, and the note
+  // can also change from another device. Our own writes come straight back
+  // as change events; those are recognized by content and skipped.
+  readonly property string home: Quickshell.env("HOME")
+  readonly property string stateDir: home + "/.local/state/omarchy/"
+  readonly property string statePath: stateDir + "todays-top-3.json"
+  readonly property string historyPath: stateDir + "todays-top-3-history.json"
+  readonly property string localNotePath: stateDir + "todays-top-3.md"
+
+  readonly property string syncPath: Model.expandHome(String(root.setting("notePath", "")).replace(/^file:\/\//, ""), home)
+  readonly property bool syncOn: root.setting("syncNote", false) === true && syncPath !== ""
+  readonly property string notePath: syncOn ? syncPath : localNotePath
+
+  // The note is only read once local state is in, so ids and times can be
+  // matched to it, and a first run can move old lists into it.
+  property bool stateReady: false
+  property bool wasSyncOn: false
+  // Turning sync off writes the current lists back to the local note rather
+  // than reading a stale local copy from before sync was on.
+  property bool adoptOnNextNoteLoad: false
+
+  onSyncOnChanged: {
+    if (!syncOn && wasSyncOn) adoptOnNextNoteLoad = true
+    wasSyncOn = syncOn
   }
 
-  // State lives outside this plugin's own folder, under the same
-  // ~/.local/state/omarchy/ tree the first-party plugins use for their own
-  // local state (see notifications.json, settings/weather.json). Keeping it
-  // out of the plugin directory means it's never at risk of being swept up
-  // if this folder is ever a git checkout that gets pushed somewhere.
-  readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy/"
-  readonly property string statePath: stateDir + "todays-top-3.json"
+  onNotePathChanged: {
+    root.lastNoteText = ""
+    noteDirProc.running = true
+  }
+
+  property string lastStateText: ""
+  property string lastNoteText: ""
+  property string lastHistoryText: ""
+
+  function assignIfChanged(name, value) {
+    if (JSON.stringify(root[name]) !== JSON.stringify(value)) root[name] = value
+  }
 
   Process {
     id: ensureDirProc
     command: ["bash", "-c", "mkdir -p \"$1\" && chmod 700 \"$1\"", "--", root.stateDir]
   }
 
-  // Belt-and-suspenders: the containing directory is already 700, so
-  // nothing can reach this file without going through it first. This just
-  // keeps the file's own mode tight too, re-applied after every write since
-  // atomic writes replace the file (and its mode) each time. Triggered from
-  // onSaved rather than right after setText: the write lands asynchronously,
-  // so an immediate chmod could miss a file that didn't exist yet.
   Process {
-    id: chmodFileProc
+    id: noteDirProc
+    command: ["bash", "-c", "mkdir -p \"$(dirname \"$1\")\"", "--", root.notePath]
+  }
+
+  // Atomic writes replace the file (and its mode) each time, so the
+  // owner-only mode is re-applied after every save of the private files.
+  Process {
+    id: chmodStateProc
     command: ["chmod", "600", root.statePath]
   }
 
-  readonly property string historyPath: stateDir + "todays-top-3-history.json"
+  Process {
+    id: chmodNoteProc
+    command: ["chmod", "600", root.localNotePath]
+  }
 
-  // Watched because the bar exists once per screen: pressing play on one
-  // monitor has to show up on the others. Our own writes come straight back
-  // as change events, so those are recognized by content and skipped, and
-  // otherwise only the parts that actually changed are reassigned — so a
-  // heartbeat write from another screen never rebuilds the task rows (and
-  // throws away an edit in progress).
-  property string lastStateText: ""
-  property string lastHistoryText: ""
+  Process {
+    id: chmodHistoryProc
+    command: ["chmod", "600", root.historyPath]
+  }
 
-  function assignIfChanged(name, value) {
-    if (JSON.stringify(root[name]) !== JSON.stringify(value)) root[name] = value
+  // Ids, times and days added are matched to the lists by id first (another
+  // screen writing the same ids) and by text second.
+  function withMeta(list, items) {
+    var used = {}
+    return list.map(function(t) {
+      var hit = items.find(function(k) { return !used[k.id] && k.id === t.id })
+        || items.find(function(k) { return !used[k.id] && k.text === t.text })
+      if (!hit) return t
+      used[hit.id] = true
+      return Object.assign({}, t, { id: hit.id, addedOn: hit.addedOn })
+    })
   }
 
   FileView {
@@ -312,28 +385,76 @@ Panel {
     printErrors: false
     watchChanges: true
     onFileChanged: reload()
-    onSaved: chmodFileProc.running = true
+    onSaved: chmodStateProc.running = true
     onLoaded: {
       var raw = text()
       if (raw === root.lastStateText) return
       root.lastStateText = raw
       var state = Model.parseState(raw)
-      root.assignIfChanged("tasks", state.tasks)
+      if (!root.stateReady) {
+        // Shown right away; the note, once read, has the final say. If there
+        // is no note yet (first run after an update), these move into it.
+        root.tasks = state.tasks
+        root.later = state.later
+      } else if (state.items.length) {
+        root.assignIfChanged("tasks", root.withMeta(root.tasks, state.items))
+        root.assignIfChanged("later", root.withMeta(root.later, state.items))
+      }
       root.assignIfChanged("done", state.done)
-      root.assignIfChanged("parked", state.parked)
-      // Another screen's copy only knows the heartbeat from disk, so its
-      // writes can carry an older one. Keep the newest for the same session,
-      // or the gap would look like sleep and end a timer that's still going.
-      var t = state.timer
-      if (t && root.timer && t.taskId === root.timer.taskId && t.startedAt === root.timer.startedAt)
-        t.lastBeat = Math.max(t.lastBeat, root.timer.lastBeat)
-      root.assignIfChanged("timer", t)
-      root.assignIfChanged("streak", state.focus)
+      root.tipDismissed = state.tipDismissed
+      root.stateReady = true
     }
+    onLoadFailed: root.stateReady = true
+  }
+
+  FileView {
+    id: noteFile
+    path: root.stateReady ? root.notePath : ""
+    atomicWrites: true
+    printErrors: false
+    watchChanges: true
+    onFileChanged: reload()
+    onSaved: if (root.notePath === root.localNotePath) chmodNoteProc.running = true
+    onLoaded: {
+      var raw = text()
+      if (raw === root.lastNoteText) return
+      if (root.adoptOnNextNoteLoad) {
+        root.adoptOnNextNoteLoad = false
+        persist()
+        return
+      }
+      root.lastNoteText = raw
+      root.applyNoteText(raw)
+    }
+    // No note yet: a first run, or sync was just pointed at a new file.
+    // Either way, write what the panel has.
     onLoadFailed: {
-      root.tasks = []
-      root.done = []
+      root.adoptOnNextNoteLoad = false
+      if (root.stateReady) persist()
     }
+  }
+
+  function applyNoteText(raw) {
+    var applied = Model.applyNote(Model.parseNote(raw), root.tasks.concat(root.later))
+    var logNext = applied.log
+    var doneNext = root.done
+    var countsNext = root.doneCounts
+    applied.completed.forEach(function(c) {
+      logNext = Model.addLog(logNext, c.text, Date.now(), Model.stepsDone(c))
+      doneNext = [{ id: c.id, text: c.text, completedAt: Date.now(), steps: c.steps }].concat(doneNext).slice(0, Model.DONE_SHOWN)
+      countsNext = Model.bumpDone(countsNext, Date.now(), 1)
+    })
+    if (applied.completed.length) {
+      root.doneCounts = countsNext
+      persistHistory()
+    }
+    root.notePreamble = applied.preamble
+    root.assignIfChanged("tasks", applied.tasks)
+    root.assignIfChanged("later", applied.later)
+    root.assignIfChanged("done", doneNext)
+    root.log = logNext
+    // Writes back only if the tidy form differs (e.g. old marks converted).
+    persist()
   }
 
   FileView {
@@ -348,17 +469,41 @@ Panel {
       var raw = text()
       if (raw === root.lastHistoryText) return
       root.lastHistoryText = raw
-      root.assignIfChanged("days", Model.parseHistory(raw))
+      root.assignIfChanged("doneCounts", Model.parseDoneCounts(raw))
+    }
+  }
+
+  function persist() {
+    saveNoteTimer.restart()
+    saveStateSoon()
+  }
+
+  function saveStateSoon() {
+    saveStateTimer.restart()
+  }
+
+  Timer {
+    id: saveStateTimer
+    interval: 200
+    repeat: false
+    onTriggered: {
+      var text = Model.serializeState(root.tasks, root.later, root.done, root.tipDismissed)
+      if (text === root.lastStateText) return
+      root.lastStateText = text
+      stateFile.setText(text)
     }
   }
 
   Timer {
-    id: saveTimer
+    id: saveNoteTimer
     interval: 200
     repeat: false
     onTriggered: {
-      root.lastStateText = Model.serializeState(root.tasks, root.done, root.parked, root.timer, root.streak)
-      stateFile.setText(root.lastStateText)
+      if (!root.stateReady) return
+      var text = Model.serializeNote(root.notePreamble, root.tasks, root.later, root.log)
+      if (text === root.lastNoteText) return
+      root.lastNoteText = text
+      noteFile.setText(text)
     }
   }
 
@@ -371,113 +516,44 @@ Panel {
     interval: 200
     repeat: false
     onTriggered: {
-      root.lastHistoryText = Model.serializeHistory(root.days)
+      root.lastHistoryText = Model.serializeHistory(root.doneCounts)
       historyFile.setText(root.lastHistoryText)
     }
   }
 
-  Process {
-    id: chmodHistoryProc
-    command: ["chmod", "600", root.historyPath]
-  }
-
-  // ---- Heartbeat -----------------------------------------------------------
-  //
-  // Every 10s while a session runs, the leading copy (see Model.claimLeader)
-  // records "still awake at <time>". A gap between heartbeats means the
-  // machine slept or the shell was down, and the session is ended at the
-  // last heartbeat — never counting the time asleep, and never cutting more
-  // than a few seconds of real work. The heartbeat is saved to disk once a
-  // minute so a crash or shell restart is handled the same way.
-  readonly property string instanceId: Model.generateId()
-  property bool wasLeader: false
-  property real lastSavedBeat: 0
-
-  function heartbeat() {
-    var n = Date.now()
-    root.now = n
-    if (!Model.claimLeader(root.instanceId, n)) {
-      root.wasLeader = false
-      return
-    }
-    // A copy that just took over only knows the heartbeat from disk, which
-    // can be up to a minute old, so it allows a wider gap once.
-    var gapLimit = root.wasLeader ? 40000 : 90000
-    root.wasLeader = true
-    if (!root.timer) return
-
-    if (n - root.timer.lastBeat > gapLimit) {
-      root.stopTimer(root.timer.lastBeat)
-      return
-    }
-
-    root.timer = Object.assign({}, root.timer, { lastBeat: n })
-    if (n - root.lastSavedBeat >= 60000) {
-      root.lastSavedBeat = n
-      persist()
-    }
-    if (!lockCheckProc.running) lockCheckProc.running = true
-
-    if (root.breakDue && !root.streak.alerted) {
-      root.streak = Object.assign({}, root.streak, { alerted: true })
-      persist()
-      breakNotifyProc.running = true
-    }
-  }
-
-  Timer {
-    interval: 10000
-    repeat: true
-    running: true
-    onTriggered: root.heartbeat()
-  }
-
-  // Locking the screen pauses right away. The lock screen belongs to the
-  // shell itself, so it's asked directly rather than guessed from idle time
-  // (sitting still reading for five minutes is still work).
-  Process {
-    id: lockCheckProc
-    command: ["omarchy-shell", "lock", "isLocked"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        if (text.trim() === "true" && root.timer) root.stopTimer(Date.now())
-      }
-    }
-  }
-
-  Process {
-    id: breakNotifyProc
-    command: ["notify-send", "-a", "Today's Top 3", "90 minutes of focus", "Time for a break — 5 minutes away resets it."]
-  }
-
-  // Only used for the "back but paused" hint: how long you've been at the
-  // keyboard again. Ignores inhibitors so a playing video doesn't count.
-  IdleMonitor {
-    id: idleMonitor
-    timeout: 60
-    respectInhibitors: false
-    onIsIdleChanged: root.activeSince = isIdle ? 0 : Date.now()
-  }
-
-  Component.onDestruction: Model.releaseLeader(root.instanceId)
-
-  // Lets a done entry clear out shortly after midnight even if the panel is
-  // never reopened, without a tight poll — half-hourly is plenty for a
-  // once-a-day boundary.
   Timer {
     interval: 30 * 60 * 1000
     repeat: true
     running: true
-    onTriggered: root.pruneExpiredDone()
+    onTriggered: {
+      root.now = Date.now()
+      root.pruneExpired()
+    }
   }
 
   Component.onCompleted: {
     ensureDirProc.running = true
-    if (!idleMonitor.isIdle) root.activeSince = Date.now()
     Qt.callLater(function() {
       stateFile.reload()
       historyFile.reload()
     })
+  }
+
+  // ---- UI ------------------------------------------------------------------
+
+  readonly property color dimText: Qt.darker(root.bar.foreground, 1.6)
+  readonly property color quietText: Qt.darker(root.bar.foreground, 1.3)
+  readonly property color accent: Color.accent
+
+  function ageLabel(item) {
+    var d = Model.ageDays(item.addedOn, root.now)
+    return d > 0 ? d + "d" : ""
+  }
+
+  function stripShade(level) {
+    if (level < 0) return "transparent"
+    if (level === 0) return Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.1)
+    return Qt.rgba(root.accent.r, root.accent.g, root.accent.b, level === 1 ? 0.55 : level === 2 ? 0.8 : 1)
   }
 
   KeyboardPanel {
@@ -488,7 +564,7 @@ Panel {
     open: root.opened
     centerOnBar: true
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(326))
+    contentWidth: panel.fittedContentWidth(Style.space(400))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
@@ -503,296 +579,366 @@ Panel {
         width: parent.width
         spacing: Style.space(12)
 
-        Text {
-          textFormat: Text.PlainText
-          text: "TODAY'S TOP 3"
-          color: Qt.darker(root.bar.foreground, 1.2)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-          font.letterSpacing: 1
+        // Capture first: the cursor lands here every time the panel opens.
+        // Settings take over the whole panel, so everything else steps aside.
+        Row {
+          visible: !root.settingsOpen
+          width: column.width
+          spacing: Style.space(6)
+
+          Text {
+            id: promptGlyph
+            anchors.verticalCenter: parent.verticalCenter
+            text: "›"
+            color: root.accent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+          }
+
+          TextField {
+            id: input
+            width: column.width - promptGlyph.width - Style.space(6)
+            placeholderText: root.inputHint !== "" ? root.inputHint
+              : root.stepTarget ? "Step for: " + root.stepTarget.text
+              : (root.atCap ? "Add a thought for Later" : "Add a task")
+            foreground: root.bar.foreground
+            font.family: root.bar.fontFamily
+
+            onAccepted: root.addTask()
+            Keys.onEscapePressed: function(event) {
+              if (root.stepTargetId !== "") {
+                root.stepTargetId = ""
+                input.text = ""
+                event.accepted = true
+              } else {
+                event.accepted = false
+              }
+            }
+            Keys.onTabPressed: function(event) {
+              if (input.text.trim() !== "" && root.tasks.length > 0) {
+                root.addStep()
+                event.accepted = true
+              } else {
+                event.accepted = false
+              }
+            }
+          }
+        }
+
+        Item {
+          visible: !root.settingsOpen
+          width: column.width
+          height: todayHeader.implicitHeight
+
+          Text {
+            id: todayHeader
+            textFormat: Text.PlainText
+            text: root.planMode ? "PICK TODAY'S 3" : "TODAY"
+            color: root.planMode ? root.bar.foreground : root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.5
+          }
         }
 
         Repeater {
-          model: root.tasks
+          model: root.settingsOpen ? [] : root.tasks
 
-          Item {
-            id: taskRow
+          Column {
+            id: taskBlock
             required property var modelData
             required property int index
             width: column.width
-            height: Math.max(doneBtn.height, upBtn.height, textColumn.implicitHeight, Style.space(22))
+            spacing: Style.space(6)
 
-            readonly property bool isRunning: root.timer !== null && root.timer.taskId === modelData.id
+            readonly property bool isTop: index === 0
+            readonly property var steps: modelData.steps || []
+            readonly property int stepsDone: Model.stepsDone(modelData)
 
-            HoverHandler { id: rowHover }
-            readonly property int totalSeconds: (modelData.seconds || 0) + (isRunning ? Model.liveSeconds(root.timer, root.now) : 0)
+            Item {
+              id: taskRow
+              width: parent.width
+              height: Math.max(doneBtn.height, textColumn.implicitHeight, Style.space(22))
 
-            PanelActionButton {
-              id: doneBtn
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "✓"
-              tooltipText: "Done"
-              foreground: root.bar.foreground
-              onClicked: {
-                if (completeFlash.active) return
-                completeFlash.start()
+              HoverHandler { id: rowHover }
+              readonly property bool showHoverActions: rowHover.hovered && root.editingTaskId !== taskBlock.modelData.id
+
+              Rectangle {
+                anchors.fill: parent
+                anchors.margins: -Style.space(4)
+                visible: root.planMode
+                radius: Style.space(5)
+                color: "transparent"
+                border.width: 1
+                border.color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.25)
               }
-            }
 
-            Column {
-              id: textColumn
-              anchors.left: doneBtn.right
-              anchors.leftMargin: Style.space(8)
-              anchors.right: parkBtn.left
-              anchors.rightMargin: Style.space(4)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(2)
-
-              Text {
-                id: taskLabel
-                textFormat: Text.PlainText
-                visible: taskRow.modelData.id !== root.editingTaskId
-                width: textColumn.width
-                text: taskRow.modelData.text
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.subtitle
-                font.bold: true
-                wrapMode: Text.WordWrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
-
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.startEditTask(taskRow.modelData.id)
+              PanelActionButton {
+                id: doneBtn
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "✓"
+                tooltipText: "Done"
+                foreground: root.bar.foreground
+                onClicked: {
+                  if (completeFlash.active) return
+                  completeFlash.start()
                 }
               }
 
-              // Wraps instead of horizontally scrolling. A single-line field
-              // showing a long selected value tends to land scrolled to the
-              // end, hiding the start — wrapping sidesteps that entirely by
-              // keeping the whole task visible at once, matching how the
-              // read-only label above already wraps.
-              TextArea {
-                id: editField
-                visible: taskRow.modelData.id === root.editingTaskId
-                width: textColumn.width
-                text: taskRow.modelData.text
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.subtitle
-                wrapMode: TextEdit.WordWrap
-                padding: 0
-                background: Item {}
+              Column {
+                id: textColumn
+                anchors.left: doneBtn.right
+                anchors.leftMargin: Style.space(8)
+                anchors.right: stepBtn.left
+                anchors.rightMargin: Style.space(4)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
 
-                onVisibleChanged: if (visible) { forceActiveFocus(); selectAll() }
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Escape) {
-                    root.cancelEditTask()
-                    event.accepted = true
-                  } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
-                    root.commitEditTask(taskRow.modelData.id, editField.text)
-                    event.accepted = true
+                Text {
+                  textFormat: Text.PlainText
+                  visible: taskBlock.modelData.id !== root.editingTaskId
+                  width: textColumn.width
+                  text: (Model.isQuick(taskBlock.modelData.text) ? "⚡ " : "") + Model.displayText(taskBlock.modelData.text)
+                  // While doing, #1 leads; the other two step back.
+                  readonly property bool secondary: !root.planMode && !taskBlock.isTop
+                  color: secondary ? root.quietText : root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: secondary ? Style.font.body : Style.font.subtitle
+                  font.bold: !secondary
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.startEditTask(taskBlock.modelData.id)
                   }
                 }
+
+                TextArea {
+                  id: editField
+                  visible: taskBlock.modelData.id === root.editingTaskId
+                  width: textColumn.width
+                  text: taskBlock.modelData.text
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  wrapMode: TextEdit.WordWrap
+                  padding: 0
+                  background: Item {}
+
+                  onVisibleChanged: if (visible) { forceActiveFocus(); selectAll() }
+                  Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape) {
+                      root.cancelEditTask()
+                      event.accepted = true
+                    } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
+                      root.commitEditTask(taskBlock.modelData.id, editField.text)
+                      event.accepted = true
+                    }
+                  }
+                }
+
+                // Time spent, steps (on the tasks below the top one) and how
+                // many days the task has waited. Nothing for a fresh task.
+                Text {
+                  textFormat: Text.PlainText
+                  visible: text !== "" && taskBlock.modelData.id !== root.editingTaskId
+                  text: [
+                    !taskBlock.isTop && taskBlock.steps.length > 0 ? taskBlock.stepsDone + "/" + taskBlock.steps.length : "",
+                    root.ageLabel(taskBlock.modelData)
+                  ].filter(function(s) { return s !== "" }).join(" · ")
+                  color: root.dimText
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
 
-              // Total across every day this task has been on the list. No
-              // line at all until it's been timed, so an untimed list looks
-              // exactly as it always did.
-              Text {
-                textFormat: Text.PlainText
-                visible: taskRow.totalSeconds > 0 && taskRow.modelData.id !== root.editingTaskId
-                text: Model.formatDuration(taskRow.totalSeconds)
-                color: taskRow.isRunning ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.6)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
+              PanelActionButton {
+                id: stepBtn
+                anchors.right: laterBtn.left
+                anchors.verticalCenter: parent.verticalCenter
+                opacity: taskRow.showHoverActions && taskBlock.steps.length < Model.STEP_CAP ? 1 : 0
+                enabled: opacity > 0
+                iconText: "󰐕"
+                tooltipText: "Add a step"
+                foreground: Qt.darker(root.bar.foreground, 1.4)
+                hoverColor: root.bar.foreground
+                onClicked: root.startStepMode(taskBlock.modelData.id)
+              }
+
+              PanelActionButton {
+                id: laterBtn
+                anchors.right: taskBlock.isTop ? parent.right : startBtn.left
+                anchors.rightMargin: Style.space(2)
+                anchors.verticalCenter: parent.verticalCenter
+                opacity: taskRow.showHoverActions ? 1 : 0
+                enabled: opacity > 0
+                iconText: "󰄠"
+                tooltipText: "Move to Later"
+                foreground: Qt.darker(root.bar.foreground, 1.4)
+                hoverColor: root.bar.foreground
+                onClicked: root.toLater(taskBlock.modelData.id)
+              }
+
+              // Focus on this: to the top of the list.
+              PanelActionButton {
+                id: startBtn
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !taskBlock.isTop
+                opacity: taskRow.showHoverActions ? 1 : 0
+                enabled: opacity > 0
+                iconText: "↑"
+                tooltipText: "Focus on this (make it #1)"
+                foreground: Qt.darker(root.bar.foreground, 1.4)
+                hoverColor: root.bar.foreground
+                onClicked: root.makeTop(taskBlock.modelData.id)
+              }
+
+              // The finishing moment: the row burns through in dither blocks.
+              FlashTag {
+                id: completeFlash
+                sweep: true
+                frames: ["░", "▒", "▓", "█"]
+                frameInterval: 80
+                holdInterval: 120
+                fontFamily: root.bar.fontFamily
+                fontSize: Style.font.subtitle
+                idleColor: root.accent
+                finishColor: root.accent
+                onFinished: root.completeTask(taskBlock.modelData.id)
               }
             }
 
-            // Only shown while the row is hovered, but its space is always
-            // reserved so the task text never reflows under the mouse.
-            PanelActionButton {
-              id: parkBtn
-              anchors.right: taskRow.index > 0 ? upBtn.left : playBtn.left
-              anchors.rightMargin: Style.space(2)
-              anchors.verticalCenter: parent.verticalCenter
-              opacity: rowHover.hovered && root.editingTaskId !== taskRow.modelData.id ? 1 : 0
-              enabled: opacity > 0 && !root.parkFull
-              iconText: "󰐃"
-              tooltipText: root.parkFull ? "Already one parked" : "Park for later"
-              foreground: Qt.darker(root.bar.foreground, 1.4)
-              hoverColor: root.bar.foreground
-              onClicked: root.parkTask(taskRow.modelData.id)
+            // Steps show on the top task only. The first open one is the
+            // next thing to do, so it's the one in bold.
+            Repeater {
+              model: taskBlock.isTop || root.stepTargetId === taskBlock.modelData.id ? taskBlock.steps : []
+
+              Item {
+                id: stepRow
+                required property var modelData
+                required property int index
+                width: taskBlock.width
+                height: Style.space(18)
+
+                readonly property bool isNext: !modelData.done && taskBlock.steps.findIndex(function(s) { return !s.done }) === index
+                HoverHandler { id: stepHover }
+
+                Text {
+                  id: stepMark
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(32)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: stepRow.modelData.done ? "✓" : (stepRow.isNext ? "›" : "○")
+                  color: stepRow.modelData.done || stepRow.isNext ? root.accent : root.dimText
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.left: stepMark.right
+                  anchors.leftMargin: Style.space(8)
+                  anchors.right: removeStepBtn.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: stepRow.modelData.text
+                  color: stepRow.modelData.done ? root.dimText : root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: stepRow.isNext
+                  font.strikeout: stepRow.modelData.done
+                  elide: Text.ElideRight
+                }
+
+                MouseArea {
+                  anchors.left: parent.left
+                  anchors.right: removeStepBtn.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.toggleStep(taskBlock.modelData.id, stepRow.index)
+                }
+
+                PanelActionButton {
+                  id: removeStepBtn
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  size: Style.space(16)
+                  opacity: stepHover.hovered ? 1 : 0
+                  enabled: opacity > 0
+                  iconText: "✕"
+                  tooltipText: "Remove step"
+                  foreground: root.dimText
+                  hoverColor: root.bar.foreground
+                  onClicked: root.removeStep(taskBlock.modelData.id, stepRow.index)
+                }
+              }
             }
 
-            // Only the top task can be timed — one thing at a time. It sits
-            // where the top row would otherwise have no button at all.
-            PanelActionButton {
-              id: playBtn
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              visible: taskRow.index === 0
-              iconText: taskRow.isRunning ? "󰏤" : "󰐊"
-              tooltipText: taskRow.isRunning ? "Pause" : "Start timer"
-              foreground: root.bar.foreground
-              onClicked: root.toggleTimer()
-            }
+            // Visible way in to steps on the top task.
+            Text {
+              visible: root.stepTargetId === taskBlock.modelData.id
+              leftPadding: Style.space(32)
+              textFormat: Text.PlainText
+              text: "+ type the step above, Enter to add · Esc when done"
+              color: root.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
 
-            PanelActionButton {
-              id: upBtn
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "󰅃"
-              tooltipText: "Move up"
-              // Hidden, not just disabled, when already on top — there's
-              // nothing for it to do (and "move #1 down" is the same end
-              // state as "move #2 up", which already has its own button).
-              visible: taskRow.index > 0
-              // Dimmer at rest than the other action buttons — it's the
-              // least-reached-for one — but back to full brightness on
-              // hover so the click target still reads clearly.
-              foreground: Qt.darker(root.bar.foreground, 1.4)
-              hoverColor: root.bar.foreground
-              onClicked: root.moveTaskUp(taskRow.modelData.id)
-            }
-
-            // Brief terminal-style "[ OK ]" tag before the row actually
-            // leaves the active list. Declared last so it paints on top of
-            // the row's other children — QtQuick stacks same-z siblings in
-            // declaration order, and this needs to cover everything above
-            // it while it's active, not sit behind it.
-            FlashTag {
-              id: completeFlash
-              frames: ["[    ]", "[ .  ]", "[ .. ]", "[ OK ]"]
-              fontFamily: root.bar.fontFamily
-              fontSize: Style.font.body
-              idleColor: root.bar.foreground
-              onFinished: root.completeTask(taskRow.modelData.id)
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.startStepMode(taskBlock.modelData.id)
+              }
             }
           }
         }
 
-        // Empty reads differently depending on why it's empty: having
-        // finished something today earns "All clear", not the same neutral
-        // placeholder as a day that hasn't started yet.
-        Text {
-          textFormat: Text.PlainText
-          visible: root.tasks.length === 0
-          text: root.allClearRevealing
-            ? root.allClearFullText.slice(0, root.allClearRevealIndex)
-            : (root.done.length > 0 ? root.allClearFullText : "Nothing yet — add up to 3.")
-          color: root.done.length > 0 ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.5)
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.italic: root.done.length === 0
-          font.bold: root.done.length > 0
-        }
+        // Free slots, so an empty one reads as a place to fill.
+        Repeater {
+          // Only while planning; while doing, an empty slot is just quiet.
+          model: root.planMode && !root.settingsOpen ? Math.max(0, Model.TODAY_CAP - root.tasks.length) : 0
 
-        // No custom blink here — the field auto-focuses on open, so the
-        // real text cursor is doing that job already (and correctly, synced
-        // to actual typing). A second, independent blinking "_" was left
-        // over from before auto-focus existed and just fought the real one.
-        TextField {
-          id: input
-          width: column.width
-          enabled: !root.atCap
-          placeholderText: root.atCap ? (root.parkFull ? "Finish one first" : "Finish or park one first") : "Add a task"
-          foreground: root.bar.foreground
-          font.family: root.bar.fontFamily
+          Item {
+            required property int index
+            width: column.width
+            height: Style.space(22)
 
-          onAccepted: root.addTask()
-        }
-
-        // One quiet footer line for everything secondary: time stats on the
-        // left (click to cycle today/week/month/year, back to today on every
-        // open), and the parked/done toggles on the right, each shown only
-        // when it has something in it. Keeps the tasks sitting directly on
-        // top of the input instead of behind two lines of chrome.
-        Item {
-          width: column.width
-          height: statsText.implicitHeight
-
-          Text {
-            id: statsText
-            textFormat: Text.PlainText
-            anchors.left: parent.left
-            text: root.statsPeriod + " · " + Model.formatDuration(Model.periodSeconds(root.days, root.timer, root.statsPeriod, root.now))
-            color: Qt.darker(root.bar.foreground, 1.6)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.caption
-
-            MouseArea {
+            Rectangle {
               anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                root.now = Date.now()
-                root.statsPeriodIndex = (root.statsPeriodIndex + 1) % Model.PERIODS.length
-              }
-            }
-          }
-
-          Row {
-            anchors.right: parent.right
-            spacing: Style.space(4)
-
-            Text {
-              textFormat: Text.PlainText
-              visible: root.parked.length > 0
-              text: "parked " + root.parked.length
-              color: root.parkedExpanded ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.6)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  root.parkedExpanded = !root.parkedExpanded
-                  if (root.parkedExpanded) root.doneExpanded = false
-                }
-              }
+              anchors.margins: -Style.space(4)
+              visible: root.planMode
+              radius: Style.space(5)
+              color: "transparent"
+              border.width: 1
+              border.color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.12)
             }
 
             Text {
+              anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              visible: root.parked.length > 0 && root.done.length > 0
-              text: "·"
-              color: Qt.darker(root.bar.foreground, 1.6)
+              leftPadding: Style.space(6)
+              text: root.planMode ? (root.tasks.length + parent.index + 1) + "    empty" : "○   ·  ·  ·"
+              color: Qt.darker(root.bar.foreground, 2.2)
               font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-
-            Text {
-              textFormat: Text.PlainText
-              visible: root.done.length > 0
-              text: "done " + root.done.length
-              color: root.doneExpanded ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.6)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  root.doneExpanded = !root.doneExpanded
-                  if (root.doneExpanded) root.parkedExpanded = false
-                }
-              }
+              font.pixelSize: Style.font.bodySmall
             }
           }
         }
 
-        // Opens below the footer line that toggled it. Only one list at a
-        // time, and only the open one instantiates rows (the other's model
-        // is []), so a collapsed list costs nothing.
+        // Later: under Today whenever a slot is free, so picking the day is
+        // just ↑. With Today full it waits behind "later N" in the footer.
         Column {
           width: column.width
-          spacing: Style.space(4)
-          visible: (root.parkedExpanded && root.parked.length > 0) || (root.doneExpanded && root.done.length > 0)
+          spacing: Style.space(6)
+          visible: root.laterVisible && !root.settingsOpen
 
           Rectangle {
             width: column.width
@@ -801,168 +947,470 @@ Panel {
             opacity: 0.12
           }
 
-          Item { width: 1; height: Style.space(2) }
+          Text {
+            topPadding: Style.space(4)
+            textFormat: Text.PlainText
+            text: root.planMode ? "FROM LATER · " + root.laterTaskCount : "LATER · " + root.laterTaskCount
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.5
+          }
+
+          // Important first, then the rest. Ideas fold away below.
+          Text {
+            visible: root.laterGroups.important.length > 0
+            topPadding: Style.space(2)
+            textFormat: Text.PlainText
+            text: "IMPORTANT"
+            color: root.accent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.5
+          }
 
           Repeater {
-            model: root.parkedExpanded ? root.parked : []
+            model: root.laterVisible ? root.laterGroups.important : []
+            delegate: laterRowComponent
+          }
+
+          Text {
+            visible: root.laterGroups.important.length > 0 && root.laterGroups.normal.length > 0
+            topPadding: Style.space(4)
+            textFormat: Text.PlainText
+            text: "OTHER"
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.5
+          }
+
+          Repeater {
+            model: root.laterVisible ? root.laterGroups.normal.slice(0, root.laterShown) : []
+            delegate: laterRowComponent
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: root.laterGroups.normal.length > root.laterShown
+            text: "+" + (root.laterGroups.normal.length - root.laterShown) + " more in the note"
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            visible: root.laterGroups.ideas.length > 0
+            textFormat: Text.PlainText
+            topPadding: Style.space(4)
+            text: (root.ideasExpanded ? "▾ " : "▸ ") + "IDEAS · " + root.laterGroups.ideas.length
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.5
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.ideasExpanded = !root.ideasExpanded
+            }
+          }
+
+          Repeater {
+            model: root.laterVisible && root.ideasExpanded ? root.laterGroups.ideas : []
+            delegate: laterRowComponent
+          }
+
+          Component {
+            id: laterRowComponent
 
             Item {
-              id: parkedRow
+              id: laterRow
               required property var modelData
               width: column.width
-              height: Style.space(17)
+              height: Style.space(18)
+              HoverHandler { id: laterHover }
+
+              readonly property bool important: Model.groupOf(modelData) === "important"
+              readonly property bool idea: Model.groupOf(modelData) === "ideas"
+              readonly property bool quick: Model.isQuick(modelData.text)
+
+              // Leading mark: ⚡ for a quick win, else a quiet dot, so
+              // every row's text starts in the same place.
+              Text {
+                id: laterLead
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(16)
+                text: laterRow.quick ? "⚡" : "·"
+                color: laterRow.quick ? root.accent : root.dimText
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
 
               Text {
                 textFormat: Text.PlainText
-                anchors.left: parent.left
-                anchors.right: parkedTime.left
-                anchors.rightMargin: Style.space(8)
+                anchors.left: laterLead.right
+                anchors.right: markImportantBtn.left
+                anchors.rightMargin: Style.space(4)
                 anchors.verticalCenter: parent.verticalCenter
-                text: parkedRow.modelData.text
+                text: Model.displayText(laterRow.modelData.text)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
-                color: Qt.darker(root.bar.foreground, 1.3)
+                color: laterRow.idea ? root.dimText : root.quietText
                 elide: Text.ElideRight
               }
 
-              Text {
-                id: parkedTime
-                textFormat: Text.PlainText
-                anchors.right: unparkBtn.left
-                anchors.rightMargin: Style.space(8)
-                anchors.verticalCenter: parent.verticalCenter
-                text: (parkedRow.modelData.seconds || 0) > 0 ? Model.formatDuration(parkedRow.modelData.seconds) : ""
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                color: Qt.darker(root.bar.foreground, 1.6)
-              }
-
+              // Sorting buttons, on hover: important, idea, quick win.
               PanelActionButton {
-                id: unparkBtn
-                anchors.right: clearParkedBtn.left
-                anchors.rightMargin: Style.space(4)
+                id: markImportantBtn
+                anchors.right: markIdeaBtn.left
                 anchors.verticalCenter: parent.verticalCenter
                 size: Style.space(18)
-                iconText: "󰑙"
-                tooltipText: root.atCap ? "No free slot" : "Back to active"
-                enabled: !root.atCap
-                foreground: root.bar.foreground
-                onClicked: {
-                  if (unparkFlash.active || root.atCap) return
-                  unparkFlash.start()
-                }
+                opacity: laterHover.hovered ? 1 : 0
+                enabled: opacity > 0
+                iconText: laterRow.important ? "󰓎" : "󰓒"
+                tooltipText: laterRow.important ? "Not important" : "Important"
+                foreground: laterRow.important ? root.accent : root.dimText
+                hoverColor: root.bar.foreground
+                onClicked: root.toggleLaterGroup(laterRow.modelData.id, "important")
               }
 
               PanelActionButton {
-                id: clearParkedBtn
+                id: markIdeaBtn
+                anchors.right: markQuickBtn.left
+                anchors.verticalCenter: parent.verticalCenter
+                size: Style.space(18)
+                opacity: laterHover.hovered ? 1 : 0
+                enabled: opacity > 0
+                iconText: "󰌶"
+                tooltipText: laterRow.idea ? "Make it a task" : "Just an idea"
+                foreground: laterRow.idea ? root.accent : root.dimText
+                hoverColor: root.bar.foreground
+                onClicked: root.toggleLaterGroup(laterRow.modelData.id, "ideas")
+              }
+
+              PanelActionButton {
+                id: markQuickBtn
+                anchors.right: dropBtn.left
+                anchors.verticalCenter: parent.verticalCenter
+                size: Style.space(18)
+                opacity: laterHover.hovered ? 1 : 0
+                enabled: opacity > 0
+                iconText: "⚡"
+                tooltipText: laterRow.quick ? "Not a quick one" : "Quick win"
+                foreground: laterRow.quick ? root.accent : root.dimText
+                hoverColor: root.bar.foreground
+                onClicked: root.toggleLaterQuick(laterRow.modelData.id)
+              }
+
+              PanelActionButton {
+                id: dropBtn
+                anchors.right: pullBtn.left
+                anchors.verticalCenter: parent.verticalCenter
+                size: Style.space(18)
+                opacity: laterHover.hovered ? 1 : 0
+                enabled: opacity > 0
+                iconText: "✕"
+                tooltipText: "Drop it"
+                foreground: root.dimText
+                hoverColor: root.bar.foreground
+                onClicked: root.dropLater(laterRow.modelData.id)
+              }
+
+              PanelActionButton {
+                id: pullBtn
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 size: Style.space(18)
-                iconText: "✕"
-                tooltipText: "Drop it"
+                iconText: "↑"
+                tooltipText: root.atCap ? "Today is full" : "Move to Today"
+                enabled: !root.atCap
                 foreground: root.bar.foreground
-                onClicked: root.clearParked(parkedRow.modelData.id)
-              }
-
-              FlashTag {
-                id: unparkFlash
-                frames: ["[    ]", "[ <  ]", "[ << ]"]
-                fontFamily: root.bar.fontFamily
-                fontSize: Style.font.bodySmall
-                idleColor: root.bar.foreground
-                onFinished: root.unparkTask(parkedRow.modelData.id)
+                onClicked: root.pullFromLater(laterRow.modelData.id)
               }
             }
           }
 
-          // Struck-through and dimmer than parked rows: these are finished.
-          Column {
+          Text {
+            textFormat: Text.PlainText
+            visible: root.planMode && root.laterHasQuick
+            topPadding: Style.space(4)
+            text: "⚡ quick ones are a good way to get going"
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        // Settings, behind the gear in the footer. Sync is off by default:
+        // the lists stay in a private local note unless you point them at a
+        // file in a synced folder (a notes vault, Syncthing, Dropbox).
+        Column {
+          width: column.width
+          spacing: Style.space(8)
+          visible: root.settingsOpen
+
+          Item {
             width: column.width
-            spacing: Style.space(4)
-            opacity: 0.6
+            height: settingsTitle.implicitHeight
+
+            Text {
+              id: settingsTitle
+              textFormat: Text.PlainText
+              text: "‹  SETTINGS"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.5
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.settingsOpen = false
+              }
+            }
+          }
+
+          Item {
+            width: column.width
+            height: syncLabel.implicitHeight
+
+            Text {
+              id: syncLabel
+              anchors.left: parent.left
+              textFormat: Text.PlainText
+              text: "Sync with a note (e.g. Obsidian)"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              anchors.right: parent.right
+              textFormat: Text.PlainText
+              text: root.setting("syncNote", false) === true ? "[ on ]" : "[ off ]"
+              color: root.setting("syncNote", false) === true ? root.accent : root.dimText
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.setSetting("syncNote", root.setting("syncNote", false) !== true, true)
+              }
+            }
+          }
+
+          TextField {
+            id: notePathField
+            width: column.width
+            text: String(root.setting("notePath", ""))
+            placeholderText: "~/Notes/Top 3.md"
+            foreground: root.bar.foreground
+            font.family: root.bar.fontFamily
+            onAccepted: root.setSetting("notePath", Model.expandHome(text, root.home), false)
+          }
+
+          Text {
+            width: column.width
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: root.syncOn ? "Synced: " + root.notePath : "Off: lists stay in " + root.localNotePath + ". Enter a .md path and press Enter, then turn sync on."
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        // Today's finished tasks, opened from "✓ n done" in the footer. They don't take a slot.
+        // Clicking one puts it back, which is the undo for a misclick.
+        Repeater {
+          model: root.settingsOpen ? [] : root.done.slice(0, root.doneShownCount)
+
+          Item {
+            id: doneRow
+            required property var modelData
+            width: column.width
+            height: Style.space(20)
+            HoverHandler { id: doneHover }
+
+            Text {
+              id: doneMark
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "✓"
+              color: root.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              anchors.left: doneMark.right
+              anchors.leftMargin: Style.space(14)
+              anchors.right: doneTime.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              text: doneRow.modelData.text
+              color: root.dimText
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.strikeout: true
+              elide: Text.ElideRight
+            }
+
+            Text {
+              id: doneTime
+              textFormat: Text.PlainText
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: doneHover.hovered ? (root.atCap ? "slots full" : "undo")
+                : ""
+              color: root.dimText
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              enabled: !root.atCap
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.restoreTask(doneRow.modelData.id)
+            }
+          }
+        }
+
+        Rectangle {
+          width: column.width
+          height: Style.spacing.hairline
+          color: root.bar.foreground
+          opacity: 0.12
+        }
+
+        // Footer: half a year of finished tasks as small dots (today
+        // outlined), then today's done count, the Later count and settings.
+        Item {
+          width: column.width
+          height: Math.max(stripGrid.height, footerText.implicitHeight)
+
+          Grid {
+            id: stripGrid
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            rows: 7
+            flow: Grid.TopToBottom
+            spacing: 2
 
             Repeater {
-              model: root.doneExpanded ? root.done : []
+              model: root.strip
 
-              Item {
-                id: doneRow
+              Rectangle {
                 required property var modelData
-                width: column.width
-                height: Style.space(17)
+                width: 6
+                height: 6
+                radius: 1
+                color: root.stripShade(modelData.level)
+                border.width: modelData.today ? 1 : 0
+                border.color: root.bar.foreground
+              }
+            }
+          }
 
-                Text {
-                  textFormat: Text.PlainText
-                  anchors.left: parent.left
-                  anchors.right: doneTime.left
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: doneRow.modelData.text
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.strikeout: true
-                  color: Qt.darker(root.bar.foreground, 1.6)
-                  elide: Text.ElideRight
-                }
+          PanelActionButton {
+            id: gearBtn
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            size: Style.space(18)
+            iconText: "󰒓"
+            tooltipText: "Settings"
+            foreground: root.settingsOpen ? root.bar.foreground : root.dimText
+            hoverColor: root.bar.foreground
+            onClicked: root.settingsOpen = !root.settingsOpen
+          }
 
-                // Kept out of the struck-through text: the task is done, the
-                // time it took isn't crossed out.
-                Text {
-                  id: doneTime
-                  textFormat: Text.PlainText
-                  anchors.right: restoreBtn.left
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: (doneRow.modelData.seconds || 0) > 0 ? Model.formatDuration(doneRow.modelData.seconds) : ""
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: Qt.darker(root.bar.foreground, 1.6)
-                }
+          Column {
+            id: footerText
+            anchors.right: gearBtn.left
+            anchors.rightMargin: Style.space(6)
+            anchors.bottom: parent.bottom
+            spacing: Style.space(2)
 
-                PanelActionButton {
-                  id: restoreBtn
-                  anchors.right: clearDoneBtn.left
-                  anchors.rightMargin: Style.space(4)
-                  anchors.verticalCenter: parent.verticalCenter
-                  size: Style.space(18)
-                  iconText: "󰑙"
-                  tooltipText: root.atCap ? "No free slot" : "Restore to active"
-                  enabled: !root.atCap
-                  foreground: root.bar.foreground
-                  onClicked: {
-                    if (restoreFlash.active || root.atCap) return
-                    restoreFlash.start()
-                  }
-                }
+            Text {
+              anchors.right: parent.right
+              textFormat: Text.PlainText
+              visible: root.done.length > 0
+              text: "✓ " + root.done.length + " done"
+              color: root.doneAllShown ? root.bar.foreground : root.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
 
-                PanelActionButton {
-                  id: clearDoneBtn
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  size: Style.space(18)
-                  iconText: "✕"
-                  tooltipText: "Clear"
-                  foreground: root.bar.foreground
-                  onClicked: root.clearDone(doneRow.modelData.id)
-                }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.doneAllShown = !root.doneAllShown
+              }
+            }
 
-                // Mirrors the completion tag: restoring a task is the
-                // inverse of finishing one, so it gets the same brief
-                // terminal-tag treatment rather than snapping back
-                // silently. Declared last so it paints on top of this
-                // row's other children while active, same reasoning as
-                // the completion tag above.
-                FlashTag {
-                  id: restoreFlash
-                  frames: ["[    ]", "[ <  ]", "[ << ]"]
-                  fontFamily: root.bar.fontFamily
-                  fontSize: Style.font.bodySmall
-                  idleColor: root.bar.foreground
-                  onFinished: root.restoreTask(doneRow.modelData.id)
-                }
+            Text {
+              anchors.right: parent.right
+              textFormat: Text.PlainText
+              visible: root.later.length > 0
+              text: "later " + root.laterTaskCount + (root.laterGroups.ideas.length ? " · " + root.laterGroups.ideas.length + " ideas" : "")
+              color: root.laterExpanded ? root.bar.foreground : root.dimText
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+
+              MouseArea {
+                anchors.fill: parent
+                enabled: root.atCap
+                cursorShape: root.atCap ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: root.laterExpanded = !root.laterExpanded
               }
             }
           }
         }
+        // One-time tip about the shortcut, under everything else. ✕ hides it.
+        Item {
+          width: column.width
+          height: tipText.implicitHeight
+          visible: !root.tipDismissed && !root.settingsOpen
+
+          Text {
+            id: tipText
+            anchors.left: parent.left
+            anchors.right: tipClose.left
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: root.shortcutLabel !== ""
+              ? root.shortcutLabel + " opens this from anywhere"
+              : "Tip: give this a keyboard shortcut (see README)"
+            color: root.dimText
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          PanelActionButton {
+            id: tipClose
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            size: Style.space(16)
+            iconText: "✕"
+            tooltipText: "Got it"
+            foreground: root.dimText
+            hoverColor: root.bar.foreground
+            onClicked: root.dismissTip()
+          }
+        }
+
       }
     }
   }

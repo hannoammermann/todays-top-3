@@ -4,242 +4,14 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
 }
 
-// Fixed on purpose: 90 minutes of focus earns a break, and only a real
-// 5-minute stretch away counts as one.
-var FOCUS_LIMIT_SECONDS = 90 * 60
-var BREAK_MS = 5 * 60 * 1000
-// How long you have to be back at the keyboard (timer paused, break already
-// taken) before the bar starts hinting that the timer isn't running.
-var NUDGE_ACTIVE_MS = 2 * 60 * 1000
-
-function validTask(t) {
-  return t && typeof t.id === "string" && typeof t.text === "string"
-}
-
-function validDone(d) {
-  return d && typeof d.id === "string" && typeof d.text === "string" && typeof d.completedAt === "number"
-}
-
-function secondsOf(item) {
-  return item && typeof item.seconds === "number" && item.seconds > 0 ? Math.round(item.seconds) : 0
-}
-
-function cleanTask(t) {
-  return { id: t.id, text: t.text, seconds: secondsOf(t) }
-}
-
-function cleanDone(d) {
-  return { id: d.id, text: d.text, completedAt: d.completedAt, seconds: secondsOf(d) }
-}
-
-function cleanParked(p) {
-  return { id: p.id, text: p.text, seconds: secondsOf(p), parkedAt: typeof p.parkedAt === "number" ? p.parkedAt : Date.now() }
-}
-
-function validTimer(t) {
-  return t && typeof t.taskId === "string" && typeof t.startedAt === "number" && typeof t.lastBeat === "number"
-}
-
-function emptyFocus() {
-  return { seconds: 0, breakSince: 0, alerted: false, nudgeDismissed: false }
-}
-
-function cleanFocus(f) {
-  if (!f || typeof f !== "object") return emptyFocus()
-  return {
-    seconds: typeof f.seconds === "number" && f.seconds > 0 ? Math.round(f.seconds) : 0,
-    breakSince: typeof f.breakSince === "number" && f.breakSince > 0 ? f.breakSince : 0,
-    alerted: f.alerted === true,
-    nudgeDismissed: f.nudgeDismissed === true
-  }
-}
-
-// Only the first character — never force-lowercases the rest, so acronyms
-// and proper nouns ("BIOS settings") survive intact.
-function capitalizeFirst(text) {
-  return text.charAt(0).toUpperCase() + text.slice(1)
-}
-
-function startOfToday() {
-  var now = new Date()
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-}
-
-// "Recently done" means done today — cleared at local midnight rather than
-// a rolling 24h window, so it never blends into yesterday no matter what
-// time you check. Pruning happens wherever state is read or written rather
-// than on a tight timer, since there's never more than 3 entries to scan.
-function pruneDone(done) {
-  var cutoff = startOfToday()
-  return done.filter(function(d) { return d.completedAt >= cutoff })
-}
-
-function parseState(raw) {
-  try {
-    var parsed = JSON.parse(String(raw || ""))
-    var tasks = Array.isArray(parsed && parsed.tasks) ? parsed.tasks.filter(validTask).slice(0, 3).map(cleanTask) : []
-    var done = Array.isArray(parsed && parsed.done) ? pruneDone(parsed.done.filter(validDone)).slice(0, 3).map(cleanDone) : []
-    var parked = Array.isArray(parsed && parsed.parked) ? parsed.parked.filter(validTask).slice(0, PARK_CAP).map(cleanParked) : []
-    var timer = validTimer(parsed && parsed.timer) ? parsed.timer : null
-    // A timer for a task that no longer exists can't be credited anywhere.
-    if (timer && !tasks.some(function(t) { return t.id === timer.taskId })) timer = null
-    return { tasks: tasks, done: done, parked: parked, timer: timer, focus: cleanFocus(parsed && parsed.focus) }
-  } catch (e) {
-    return { tasks: [], done: [], parked: [], timer: null, focus: emptyFocus() }
-  }
-}
-
-function serializeState(tasks, done, parked, timer, focus) {
-  return JSON.stringify({
-    version: 3,
-    tasks: tasks,
-    done: done,
-    parked: parked || [],
-    timer: timer || null,
-    focus: focus || emptyFocus()
-  }, null, 2) + "\n"
-}
-
-// Capped at 3: the slot is the feature. A 4th task forces a decision about
-// one of the existing three instead of just piling on.
-function addTask(tasks, text) {
-  var trimmed = String(text || "").trim()
-  if (!trimmed || tasks.length >= 3) return tasks
-  return tasks.concat([{ id: generateId(), text: capitalizeFirst(trimmed) }])
-}
-
-// Moves a task out of the active list and into the done log with a
-// timestamp, rather than deleting it outright. Kept to the 3 most recent —
-// otherwise a day with a lot of completions would make the done list grow
-// past the active list it's supposed to sit quietly beneath.
-function completeTask(tasks, done, id) {
-  var index = tasks.findIndex(function(t) { return t.id === id })
-  if (index < 0) return { tasks: tasks, done: done }
-  var task = tasks[index]
-  var nextTasks = tasks.filter(function(t) { return t.id !== id })
-  var nextDone = [{ id: task.id, text: task.text, completedAt: Date.now(), seconds: secondsOf(task) }].concat(done).slice(0, 3)
-  return { tasks: nextTasks, done: nextDone }
-}
-
-function clearDone(done, id) {
-  return done.filter(function(d) { return d.id !== id })
-}
-
-// Undo for a misclick on "done". No-op if all 3 active slots are full —
-// restoring doesn't bump an existing task, it just isn't possible until one
-// frees up.
-function restoreTask(tasks, done, id) {
-  if (tasks.length >= 3) return { tasks: tasks, done: done }
-  var index = done.findIndex(function(d) { return d.id === id })
-  if (index < 0) return { tasks: tasks, done: done }
-  var entry = done[index]
-  var nextDone = done.filter(function(d) { return d.id !== id })
-  var nextTasks = tasks.concat([{ id: entry.id, text: entry.text, seconds: secondsOf(entry) }])
-  return { tasks: nextTasks, done: nextDone }
-}
-
-function updateTaskText(tasks, id, text) {
-  var trimmed = String(text || "").trim()
-  if (!trimmed) return tasks
-  var capitalized = capitalizeFirst(trimmed)
-  return tasks.map(function(t) { return t.id === id ? { id: t.id, text: capitalized, seconds: secondsOf(t) } : t })
-}
-
-// One bench seat, never expiring. Parking frees a slot when something
-// urgent comes up without throwing the bumped task away — but only one can
-// sit there, so it stays an exception rather than becoming a backlog under
-// another name.
-var PARK_CAP = 1
-
-function parkTask(tasks, parked, id) {
-  if (parked.length >= PARK_CAP) return { tasks: tasks, parked: parked }
-  var index = tasks.findIndex(function(t) { return t.id === id })
-  if (index < 0) return { tasks: tasks, parked: parked }
-  var task = tasks[index]
-  return {
-    tasks: tasks.filter(function(t) { return t.id !== id }),
-    parked: parked.concat([{ id: task.id, text: task.text, seconds: secondsOf(task), parkedAt: Date.now() }])
-  }
-}
-
-// Same rule as restoring a done task: only into a free slot, at the bottom.
-function unparkTask(tasks, parked, id) {
-  if (tasks.length >= 3) return { tasks: tasks, parked: parked }
-  var index = parked.findIndex(function(p) { return p.id === id })
-  if (index < 0) return { tasks: tasks, parked: parked }
-  var entry = parked[index]
-  return {
-    tasks: tasks.concat([{ id: entry.id, text: entry.text, seconds: secondsOf(entry) }]),
-    parked: parked.filter(function(p) { return p.id !== id })
-  }
-}
-
-function clearParked(parked, id) {
-  return parked.filter(function(p) { return p.id !== id })
-}
-
-// Priority is just list order. Moving up swaps a task with the one directly
-// above it, one step at a time.
-function moveTaskUp(tasks, id) {
-  var index = tasks.findIndex(function(t) { return t.id === id })
-  if (index <= 0) return tasks
-  var copy = tasks.slice()
-  var above = copy[index - 1]
-  copy[index - 1] = copy[index]
-  copy[index] = above
-  return copy
-}
-
-// ---- Timer -----------------------------------------------------------------
-//
-// Only one session runs at a time, always on the top task. Ending a session
-// credits its time to three places at once: the task's own total, the
-// per-day history, and the current focus streak.
-
-// The focus streak only resets after a real break: 5+ continuous minutes
-// with nothing running. A 4-minute pause carries the streak straight on.
-function breakTaken(timer, focus, now) {
-  return !timer && focus.breakSince > 0 && now - focus.breakSince >= BREAK_MS
-}
-
-function liveSeconds(timer, now) {
-  return timer ? Math.max(0, Math.round((now - timer.startedAt) / 1000)) : 0
-}
-
-function focusSeconds(timer, focus, now) {
-  if (breakTaken(timer, focus, now)) return 0
-  return focus.seconds + liveSeconds(timer, now)
-}
-
-function startSession(tasks, timer, focus, now) {
-  if (timer || tasks.length === 0) return null
-  var nextFocus = breakTaken(timer, focus, now)
-    ? emptyFocus()
-    : { seconds: focus.seconds, breakSince: 0, alerted: focus.alerted, nudgeDismissed: false }
-  return { timer: { taskId: tasks[0].id, startedAt: now, lastBeat: now }, focus: nextFocus }
-}
-
-// `end` is normally now, but after sleep or a crash it's the last heartbeat —
-// the moment the machine was last known to be awake.
-function stopSession(tasks, days, timer, focus, end) {
-  if (!timer) return { tasks: tasks, days: days, timer: null, focus: focus }
-  var stop = Math.max(timer.startedAt, end)
-  var elapsed = Math.round((stop - timer.startedAt) / 1000)
-  var nextTasks = tasks.map(function(t) {
-    return t.id === timer.taskId ? { id: t.id, text: t.text, seconds: secondsOf(t) + elapsed } : t
-  })
-  return {
-    tasks: nextTasks,
-    days: addSpan(days, timer.startedAt, stop),
-    timer: null,
-    focus: { seconds: focus.seconds + elapsed, breakSince: stop, alerted: focus.alerted, nudgeDismissed: false }
-  }
-}
-
-// ---- History ---------------------------------------------------------------
-//
-// Daily totals only ({ "2026-10-16": seconds }) — no task names, so the
-// history file says how much you worked, never on what.
+// Capped at 3: the slot is the feature. Everything else waits in Later.
+var TODAY_CAP = 3
+// The note's Done log keeps a month, newest first.
+var LOG_DAYS = 30
+// Steps break a task into small pieces: one level, a handful at most.
+var STEP_CAP = 5
+// Today's finished tasks stay on view (crossed out) until midnight.
+var DONE_SHOWN = 10
 
 function pad2(n) {
   return n < 10 ? "0" + n : String(n)
@@ -250,30 +22,465 @@ function dayKey(ms) {
   return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())
 }
 
-// Splits at local midnight, so a session from 23:30 to 00:45 counts 30 min
-// toward one day and 45 toward the next.
-function addSpan(days, start, end) {
-  var next = {}
-  for (var k in days) next[k] = days[k]
-  var cursor = start
-  while (cursor < end) {
-    var d = new Date(cursor)
-    var midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
-    var chunkEnd = Math.min(end, midnight)
-    var key = dayKey(cursor)
-    next[key] = (next[key] || 0) + Math.round((chunkEnd - cursor) / 1000)
-    cursor = chunkEnd
-  }
-  return next
+function dayStart(key) {
+  var p = String(key).split("-")
+  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).getTime()
 }
 
-function parseHistory(raw) {
+function startOfToday() {
+  var now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+}
+
+// Ids start with the creation time in base 36, which recovers the day a
+// task was added for lists saved before addedOn existed.
+function addedOnFromId(id) {
+  var ms = parseInt(String(id).slice(0, 8), 36)
+  return isFinite(ms) && ms > 1600000000000 && ms < Date.now() + 86400000 ? dayKey(ms) : dayKey(Date.now())
+}
+
+// Whole days since the task joined the list; 0 for today.
+function ageDays(addedOn, now) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(addedOn || ""))) return 0
+  var today = new Date(now)
+  var todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  return Math.max(0, Math.round((todayStart - dayStart(addedOn)) / 86400000))
+}
+
+function validItem(t) {
+  return t && typeof t.id === "string" && typeof t.text === "string"
+}
+
+function validDone(d) {
+  return validItem(d) && typeof d.completedAt === "number"
+}
+
+function cleanSteps(steps) {
+  if (!Array.isArray(steps)) return []
+  return steps.filter(function(s) { return s && typeof s.text === "string" && s.text !== "" })
+    .slice(0, STEP_CAP).map(function(s) { return { text: s.text, done: s.done === true } })
+}
+
+function cleanItem(t) {
+  var item = { id: t.id, text: t.text, addedOn: typeof t.addedOn === "string" ? t.addedOn : addedOnFromId(t.id), steps: cleanSteps(t.steps) }
+  if (t.group && t.group !== "later" && GROUPS.indexOf(t.group) >= 0) item.group = t.group
+  return item
+}
+
+function cleanDone(d) {
+  return { id: d.id, text: d.text, completedAt: d.completedAt, steps: cleanSteps(d.steps) }
+}
+
+function stepsDone(item) {
+  return (item.steps || []).filter(function(s) { return s.done }).length
+}
+
+// Only the first character — never force-lowercases the rest, so acronyms
+// and proper nouns ("BIOS settings") survive intact.
+function capitalizeFirst(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// "Recently done" in the panel means done today — cleared at local midnight.
+// The note's Done log is the long-term record.
+function pruneDone(done) {
+  var cutoff = startOfToday()
+  return done.filter(function(d) { return d.completedAt >= cutoff })
+}
+
+// ---- Local state (JSON) ----------------------------------------------------
+//
+// The note holds what the lists are; this file holds what only this machine
+// needs: today's done list and per-item metadata (id, day added) matched to
+// the note by text. It also
+// keeps a copy of both lists, which fills a missing note back in.
+// Version 3 files kept the lists here too; they're read as-is so the first
+// run can move them into the note.
+
+function emptyState() {
+  return { tasks: [], later: [], done: [] }
+}
+
+function parseState(raw) {
   try {
     var parsed = JSON.parse(String(raw || ""))
-    var days = parsed && parsed.days && typeof parsed.days === "object" ? parsed.days : {}
+    var raw = Array.isArray(parsed && parsed.items) ? parsed.items.filter(validItem) : []
+    var items = raw.map(cleanItem)
+    var tasks, later
+    if (raw.length) {
+      tasks = raw.filter(function(t) { return t.list !== "later" }).slice(0, TODAY_CAP).map(cleanItem)
+      later = raw.filter(function(t) { return t.list === "later" }).map(cleanItem)
+    } else {
+      tasks = Array.isArray(parsed && parsed.tasks) ? parsed.tasks.filter(validItem).slice(0, TODAY_CAP).map(cleanItem) : []
+      later = Array.isArray(parsed && parsed.parked) ? parsed.parked.filter(validItem).map(cleanItem) : []
+    }
+    var done = Array.isArray(parsed && parsed.done) ? pruneDone(parsed.done.filter(validDone)).slice(0, DONE_SHOWN).map(cleanDone) : []
+    var ui = parsed && parsed.ui && typeof parsed.ui === "object" ? parsed.ui : {}
+    return { items: items, tasks: tasks, later: later, done: done, tipDismissed: ui.tipDismissed === true }
+  } catch (e) {
+    var empty = emptyState()
+    empty.items = []
+    empty.tipDismissed = false
+    return empty
+  }
+}
+
+function serializeState(tasks, later, done, tipDismissed) {
+  return JSON.stringify({
+    version: 5,
+    items: tasks.map(function(t) { return Object.assign(cleanItem(t), { list: "today" }) })
+      .concat(later.map(function(t) { return Object.assign(cleanItem(t), { list: "later" }) })),
+    done: done,
+    ui: { tipDismissed: tipDismissed === true }
+  }, null, 2) + "\n"
+}
+
+// Turns a Hyprland bind (modmask bits + key) into "SUPER+ALT+T".
+function formatBind(modmask, key) {
+  var names = [[64, "SUPER"], [4, "CTRL"], [8, "ALT"], [1, "SHIFT"]]
+  var parts = names.filter(function(n) { return modmask & n[0] }).map(function(n) { return n[1] })
+  return parts.concat([String(key).toUpperCase()]).join("+")
+}
+
+// ---- The note (markdown) ---------------------------------------------------
+//
+// Plain markdown so it reads and edits fine anywhere, including a phone:
+//
+//   ## Today
+//   - [ ] Update CTA button
+//     - [x] Get new copy
+//     - [ ] Swap the button
+//   ## Later
+//   - [ ] Compare NAS boards
+//   ## Done
+//   - [x] 2026-11-25 Send the weekly update (2 steps)
+//
+// Parsing is lenient: headings in any case, "- [ ]", "- [x]" or bare "- "
+// bullets. Indented checkboxes under a task are its steps. Anything above
+// "## Today" (a title, properties) is kept as-is. Lines in other
+// sections are dropped on the next write, so the note stays short.
+
+function parseNote(raw) {
+  var lines = String(raw || "").split(/\r?\n/)
+  var result = { preamble: [], today: [], later: [], log: [] }
+  var groupOfSection = { important: "important", later: "later", ideas: "ideas" }
+  var section = ""
+  var seenHeading = false
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    var heading = line.match(/^#{1,6}\s+(.*?)\s*$/)
+    if (heading) {
+      var name = heading[1].toLowerCase()
+      var known = name === "today" ? "today"
+        : name === "important" ? "important"
+        : name === "later" ? "later"
+        : name === "ideas" || name === "idea" ? "ideas"
+        : name === "done" ? "done" : ""
+      // A title or other heading above the lists belongs to the preamble.
+      if (known || seenHeading) {
+        seenHeading = true
+        section = known
+        continue
+      }
+    }
+    if (!seenHeading) {
+      result.preamble.push(line)
+      continue
+    }
+    var item = line.match(/^(\s*)[-*+]\s+(?:\[([ xX])\]\s*)?(.*?)\s*$/)
+    if (!item || !item[3]) continue
+    var checked = item[2] === "x" || item[2] === "X"
+    var inLater = groupOfSection[section] !== undefined
+    var list = section === "today" ? result.today : inLater ? result.later : null
+    if (list && item[1].length > 0 && list.length > 0) {
+      var parent = list[list.length - 1]
+      if (parent.steps.length < STEP_CAP) parent.steps.push({ text: item[3], done: checked })
+    } else if (list) {
+      var entry = inLater ? fromLegacyMarks(item[3], groupOfSection[section]) : fromLegacyMarks(item[3], "later")
+      list.push({ text: entry.text, checked: checked, steps: [], group: inLater ? entry.group : undefined })
+    } else if (section === "done" && item[1].length === 0) {
+      result.log.push("- [x] " + item[3])
+    }
+  }
+  while (result.preamble.length && result.preamble[result.preamble.length - 1].trim() === "") result.preamble.pop()
+  return result
+}
+
+function serializeNote(preamble, tasks, later, log) {
+  var out = []
+  if (preamble && preamble.length) out = out.concat(preamble, [""])
+  function push(t) {
+    out.push("- [ ] " + t.text)
+    ;(t.steps || []).forEach(function(s) { out.push("  - [" + (s.done ? "x" : " ") + "] " + s.text) })
+  }
+  out.push("## Today")
+  tasks.forEach(push)
+  var g = laterGroups(later)
+  // Important and Ideas only appear once they have something in them.
+  if (g.important.length) {
+    out.push("", "## Important")
+    g.important.forEach(push)
+  }
+  out.push("", "## Later")
+  g.normal.forEach(push)
+  if (g.ideas.length) {
+    out.push("", "## Ideas")
+    g.ideas.forEach(push)
+  }
+  out.push("", "## Done")
+  out = out.concat(log)
+  return out.join("\n") + "\n"
+}
+
+// Gives each note line back its id, time and day added by matching text
+// against what this machine already knew. Lines new to it (typed on another
+// device) get a fresh id and today's date.
+//
+// Fresh ids come from the text, so every screen's copy picks the same one.
+function textId(text, n) {
+  var h = 5381
+  for (var i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0
+  return "n" + h.toString(36) + (n ? "-" + n : "")
+}
+
+function attachMeta(entries, known, used) {
+  return entries.map(function(e) {
+    for (var i = 0; i < known.length; i++) {
+      var k = known[i]
+      if (!used[k.id] && k.text === e.text) {
+        used[k.id] = true
+        return { id: k.id, text: e.text, addedOn: k.addedOn, steps: cleanSteps(e.steps), group: e.group }
+      }
+    }
+    var n = 0
+    while (used[textId(e.text, n)]) n++
+    var id = textId(e.text, n)
+    used[id] = true
+    return { id: id, text: e.text, addedOn: dayKey(Date.now()), steps: cleanSteps(e.steps), group: e.group }
+  })
+}
+
+// Turns a parsed note into lists. Ticked lines anywhere count as finished
+// (ticking a box on the phone is how you complete from there), and more than
+// 3 open Today lines spill over to the top of Later.
+function applyNote(note, known) {
+  var used = {}
+  var openToday = note.today.filter(function(e) { return !e.checked })
+  var openLater = note.later.filter(function(e) { return !e.checked })
+  var finished = note.today.concat(note.later).filter(function(e) { return e.checked })
+  var tasks = attachMeta(openToday, known, used)
+  var later = attachMeta(openLater, known, used)
+  var completed = attachMeta(finished, known, used)
+  var overflow = tasks.slice(TODAY_CAP)
+  return {
+    preamble: note.preamble,
+    tasks: tasks.slice(0, TODAY_CAP),
+    later: overflow.concat(later),
+    completed: completed,
+    log: note.log,
+    changed: finished.length > 0 || overflow.length > 0
+  }
+}
+
+function logEntry(text, now, steps) {
+  var line = "- [x] " + dayKey(now) + " " + text
+  return steps > 0 ? line + " (" + steps + (steps === 1 ? " step)" : " steps)") : line
+}
+
+function addLog(log, text, now, steps) {
+  return [logEntry(text, now, steps || 0)].concat(log)
+}
+
+// Undoing a completion takes back today's log line for it.
+function removeLog(log, text, now) {
+  var prefix = "- [x] " + dayKey(now) + " " + text
+  for (var i = 0; i < log.length; i++) {
+    if (log[i] === prefix || log[i].indexOf(prefix + " (") === 0) return log.slice(0, i).concat(log.slice(i + 1))
+  }
+  return log
+}
+
+// Dated entries older than a month go; undated lines are left alone.
+function pruneLog(log, now) {
+  var cutoff = dayKey(now - LOG_DAYS * 86400000)
+  return log.filter(function(line) {
+    var m = line.match(/^- \[x\] (\d{4}-\d{2}-\d{2})/)
+    return !m || m[1] >= cutoff
+  })
+}
+
+// ---- Groups and quick -----------------------------------------------------
+//
+// Later is split into three groups, each its own heading in the note:
+// Important, Later and Ideas. A quick win is marked with ⚡ at the end of
+// its text, which reads the same in the panel and the note.
+
+var GROUPS = ["important", "later", "ideas"]
+
+function groupOf(item) {
+  return GROUPS.indexOf(item && item.group) >= 0 ? item.group : "later"
+}
+
+function isQuick(text) {
+  return /\s*⚡\s*$/.test(String(text || ""))
+}
+
+function displayText(text) {
+  return String(text || "").replace(/\s*⚡\s*$/, "")
+}
+
+function setQuick(text, on) {
+  var base = displayText(text)
+  return on ? base + " ⚡" : base
+}
+
+// Notes written with the earlier one-character marks (! ~ ?) still read
+// right: the mark picks the group or adds ⚡, then goes away.
+function fromLegacyMarks(text, group) {
+  var m = String(text || "").match(/^\s*((?:[~!?]\s*)+)(.*)$/)
+  if (!m) return { text: text, group: group }
+  var quick = m[1].indexOf("~") >= 0
+  var g = m[1].indexOf("!") >= 0 ? "important" : m[1].indexOf("?") >= 0 ? "ideas" : group
+  return { text: quick ? setQuick(m[2], true) : m[2], group: g }
+}
+
+// Quick ones lead within each group; otherwise newest first as stored.
+function laterGroups(later) {
+  function quickFirst(list) {
+    return list.filter(function(t) { return isQuick(t.text) }).concat(list.filter(function(t) { return !isQuick(t.text) }))
+  }
+  return {
+    important: quickFirst(later.filter(function(t) { return groupOf(t) === "important" })),
+    normal: quickFirst(later.filter(function(t) { return groupOf(t) === "later" })),
+    ideas: later.filter(function(t) { return groupOf(t) === "ideas" })
+  }
+}
+
+// Clicking a group button on an item moves it there, or back to plain
+// Later if it's already in that group.
+function toggleGroup(items, id, group) {
+  return items.map(function(t) {
+    return t.id === id ? Object.assign({}, t, { group: groupOf(t) === group ? "later" : group }) : t
+  })
+}
+
+function toggleQuick(items, id) {
+  return items.map(function(t) {
+    return t.id === id ? Object.assign({}, t, { text: setQuick(t.text, !isQuick(t.text)) }) : t
+  })
+}
+
+// ---- List operations -------------------------------------------------------
+
+function newItem(text) {
+  var trimmed = String(text || "").trim()
+  if (!trimmed) return null
+  return { id: generateId(), text: capitalizeFirst(trimmed), addedOn: dayKey(Date.now()), steps: [] }
+}
+
+function completeTask(tasks, done, id) {
+  var index = tasks.findIndex(function(t) { return t.id === id })
+  if (index < 0) return null
+  var task = tasks[index]
+  return {
+    task: task,
+    tasks: tasks.filter(function(t) { return t.id !== id }),
+    done: [{ id: task.id, text: task.text, completedAt: Date.now(), steps: cleanSteps(task.steps) }].concat(done).slice(0, DONE_SHOWN)
+  }
+}
+
+function clearDone(done, id) {
+  return done.filter(function(d) { return d.id !== id })
+}
+
+// Undo for a misclick on "done", only into a free slot.
+function restoreTask(tasks, done, id) {
+  if (tasks.length >= TODAY_CAP) return null
+  var index = done.findIndex(function(d) { return d.id === id })
+  if (index < 0) return null
+  var entry = done[index]
+  return {
+    entry: entry,
+    done: done.filter(function(d) { return d.id !== id }),
+    tasks: tasks.concat([{ id: entry.id, text: entry.text, addedOn: dayKey(entry.completedAt), steps: cleanSteps(entry.steps) }])
+  }
+}
+
+function updateText(items, id, text) {
+  var trimmed = String(text || "").trim()
+  if (!trimmed) return items
+  var capitalized = capitalizeFirst(trimmed)
+  return items.map(function(t) { return t.id === id ? Object.assign({}, t, { text: capitalized }) : t })
+}
+
+// Later goes on top, so the newest thought is the first one you see.
+function moveToLater(tasks, later, id) {
+  var index = tasks.findIndex(function(t) { return t.id === id })
+  if (index < 0) return null
+  var item = Object.assign({}, tasks[index])
+  delete item.group
+  return { tasks: tasks.filter(function(t) { return t.id !== id }), later: [item].concat(later) }
+}
+
+// Back into Today at the bottom, only into a free slot. It counts as added
+// today: picking it again is a fresh decision.
+function pullFromLater(tasks, later, id) {
+  if (tasks.length >= TODAY_CAP) return null
+  var index = later.findIndex(function(t) { return t.id === id })
+  if (index < 0) return null
+  // Picked for today: it leaves its Later group.
+  var item = Object.assign({}, later[index], { addedOn: dayKey(Date.now()) })
+  delete item.group
+  return { tasks: tasks.concat([item]), later: later.filter(function(t) { return t.id !== id }) }
+}
+
+function removeItem(items, id) {
+  return items.filter(function(t) { return t.id !== id })
+}
+
+function addStep(tasks, id, text) {
+  var trimmed = String(text || "").trim()
+  if (!trimmed) return null
+  var hit = tasks.find(function(t) { return t.id === id })
+  if (!hit || (hit.steps || []).length >= STEP_CAP) return null
+  return tasks.map(function(t) {
+    return t.id === id ? Object.assign({}, t, { steps: (t.steps || []).concat([{ text: capitalizeFirst(trimmed), done: false }]) }) : t
+  })
+}
+
+function toggleStep(tasks, id, index) {
+  return tasks.map(function(t) {
+    if (t.id !== id) return t
+    return Object.assign({}, t, { steps: (t.steps || []).map(function(s, i) { return i === index ? { text: s.text, done: !s.done } : s }) })
+  })
+}
+
+function removeStep(tasks, id, index) {
+  return tasks.map(function(t) {
+    return t.id === id ? Object.assign({}, t, { steps: (t.steps || []).filter(function(s, i) { return i !== index }) }) : t
+  })
+}
+
+// Priority is just list order; quick start moves a task to the top.
+function moveToTop(tasks, id) {
+  var index = tasks.findIndex(function(t) { return t.id === id })
+  if (index <= 0) return tasks
+  return [tasks[index]].concat(tasks.slice(0, index), tasks.slice(index + 1))
+}
+
+// ---- History ---------------------------------------------------------------
+//
+// Counts only ({ "2026-11-25": 3 }) — no task names, so the history file
+// says how much got done, never what.
+
+// Tasks finished per day, for the dot strip. Counts only, no names.
+function parseDoneCounts(raw) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    var done = parsed && parsed.done && typeof parsed.done === "object" ? parsed.done : {}
     var clean = {}
-    for (var k in days) {
-      if (/^\d{4}-\d{2}-\d{2}$/.test(k) && typeof days[k] === "number" && days[k] > 0) clean[k] = Math.round(days[k])
+    for (var k in done) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k) && typeof done[k] === "number" && done[k] > 0) clean[k] = Math.round(done[k])
     }
     return clean
   } catch (e) {
@@ -281,57 +488,52 @@ function parseHistory(raw) {
   }
 }
 
-function serializeHistory(days) {
-  return JSON.stringify({ version: 1, days: days }, null, 2) + "\n"
+function bumpDone(counts, now, delta) {
+  var next = {}
+  for (var k in counts) next[k] = counts[k]
+  var key = dayKey(now)
+  next[key] = Math.max(0, (next[key] || 0) + delta)
+  if (!next[key]) delete next[key]
+  return next
 }
 
-var PERIODS = ["today", "week", "month", "year"]
+function serializeHistory(doneCounts) {
+  return JSON.stringify({ version: 3, done: doneCounts || {} }, null, 2) + "\n"
+}
 
-function periodStart(period, now) {
+// The dot strip: 26 weeks, one column per week (Monday on top), the
+// current week last. Each cell is a shade 0-3 by tasks finished that day
+// (0, 1, 2, 3+), -1 for days that haven't happened yet.
+var STRIP_WEEKS = 26
+
+// Today's square is at least as full as today's finished list, so tasks
+// done before the counts existed (or on another machine) still show.
+function withToday(counts, doneToday, now) {
+  var next = {}
+  for (var k in counts) next[k] = counts[k]
+  var key = dayKey(now)
+  next[key] = Math.max(next[key] || 0, doneToday)
+  return next
+}
+
+function dotStrip(counts, now) {
   var d = new Date(now)
-  if (period === "week") {
-    // Weeks start on Monday.
-    var sinceMonday = (d.getDay() + 6) % 7
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate() - sinceMonday).getTime()
+  var monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7)
+  var start = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - (STRIP_WEEKS - 1) * 7)
+  var todayKey = dayKey(now)
+  var cells = []
+  for (var i = 0; i < STRIP_WEEKS * 7; i++) {
+    var day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
+    var key = dayKey(day.getTime())
+    var n = counts[key] || 0
+    cells.push({ level: key > todayKey ? -1 : Math.min(3, n), today: key === todayKey, key: key, count: n })
   }
-  if (period === "month") return new Date(d.getFullYear(), d.getMonth(), 1).getTime()
-  if (period === "year") return new Date(d.getFullYear(), 0, 1).getTime()
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  return cells
 }
 
-// Recorded days plus whatever part of a running session falls in the period.
-function periodSeconds(days, timer, period, now) {
-  var start = periodStart(period, now)
-  var fromKey = dayKey(start)
-  var total = 0
-  for (var k in days) if (k >= fromKey) total += days[k]
-  if (timer) total += Math.max(0, Math.round((now - Math.max(timer.startedAt, start)) / 1000))
-  return total
-}
-
-function formatDuration(seconds) {
-  var minutes = Math.floor(seconds / 60)
-  if (minutes < 1) return seconds > 0 ? "<1m" : "0m"
-  var h = Math.floor(minutes / 60)
-  var m = minutes % 60
-  if (h === 0) return m + "m"
-  return m === 0 ? h + "h" : h + "h " + m + "m"
-}
-
-// ---- Multi-monitor ---------------------------------------------------------
-//
-// The bar (and so this plugin) exists once per screen, but only one copy may
-// run the heartbeat, lock check and notification — otherwise a second
-// monitor would double every notification. This file is a .pragma library,
-// so this variable is shared by all copies. A leader that stops checking in
-// (destroyed without cleanup, e.g. on hot reload) is replaced after 30s.
-var _leader = null
-
-function claimLeader(token, now) {
-  if (!_leader || _leader.token === token || now - _leader.seen > 30000) _leader = { token: token, seen: now }
-  return _leader.token === token
-}
-
-function releaseLeader(token) {
-  if (_leader && _leader.token === token) _leader = null
+function expandHome(path, home) {
+  var p = String(path || "").trim()
+  if (p === "~") return home
+  if (p.indexOf("~/") === 0) return home + p.slice(1)
+  return p
 }

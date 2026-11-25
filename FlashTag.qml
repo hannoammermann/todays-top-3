@@ -16,6 +16,9 @@ Item {
   property color idleColor: Color.foreground
   property color finishColor: Color.accent
   property string fontFamily: Style.font.family
+  // Sweep mode: each frame is one character repeated across the whole row,
+  // so the row burns through (░ ▒ ▓ █) instead of showing a centred tag.
+  property bool sweep: false
 
   readonly property bool active: stepTimer.running || holdTimer.running
   property int frameIndex: 0
@@ -33,10 +36,22 @@ Item {
     color: Color.popups.background
     visible: root.active
 
+    FontMetrics {
+      id: metrics
+      font.family: root.fontFamily
+      font.pixelSize: root.fontSize
+    }
+
     Text {
-      anchors.centerIn: parent
+      anchors.centerIn: root.sweep ? undefined : parent
+      anchors.left: root.sweep ? parent.left : undefined
+      anchors.right: root.sweep ? parent.right : undefined
+      anchors.verticalCenter: root.sweep ? parent.verticalCenter : undefined
+      clip: root.sweep
       textFormat: Text.PlainText
-      text: root.frames[root.frameIndex]
+      text: root.sweep
+        ? root.frames[root.frameIndex].repeat(Math.max(1, Math.ceil(root.width / Math.max(1, metrics.averageCharacterWidth))))
+        : root.frames[root.frameIndex]
       font.family: root.fontFamily
       font.pixelSize: root.fontSize
       font.bold: root.frameIndex === root.frames.length - 1

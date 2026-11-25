@@ -7,3 +7,6 @@ todays-top-3-history.json
 # Editor/OS cruft
 *.swp
 .DS_Store
+
+# Local agent notes (never published)
+CLAUDE.local.md

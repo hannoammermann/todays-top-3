@@ -2,9 +2,9 @@
 
 **Three things a day, one at a time.** An [Omarchy](https://omarchy.org/) bar widget for when your to-do list keeps winning.
 
-- **Three slots, no backlog.** Long lists feel productive and get little done. With three, every new task has to earn its place.
-- **The timer only runs on #1.** To work on something, put it first. Choosing and focusing become the same decision.
-- **A nudge after 90 minutes.** The bar turns red when it's time to step away. Take as long as you need; anything under 5 minutes doesn't count as a break.
+- **Three slots for today, Later for the rest.** Long lists feel productive and get little done. Today holds three; anything else you think of goes to Later in one keystroke, so it's written down and out of your head.
+- **One thing at a time.** #1 is the one you're on. To switch, make another task #1: choosing and focusing become the same decision.
+- **Progress you can see.** Finishing a task burns it away, and a small dot map fills in day by day — no points, no streaks to lose.
 
 All of it lives in three dots in your bar. No chat, no Eisenhower matrix, no network.
 
@@ -12,28 +12,45 @@ All of it lives in three dots in your bar. No chat, no Eisenhower matrix, no net
 
 ## What it does
 
-- **Bar**: three pips (●●○) — filled slots vs. free ones. No task text, no variable width. Hover for a tooltip ("Today — 2 of 3", or the running task and its time). The pips only change colour when something needs you — see *Focus timer*.
-- **Add**: type and hit Enter. Disabled with an explanatory placeholder once you're at 3 — finish or park one first, there's no overflow list to dump a 4th into.
-- **Complete**: ✓ plays a brief terminal-style `[ OK ]` tag before the task leaves the list.
-- **Reorder**: an up-chevron moves a task up one position. The top task doesn't get a dead, do-nothing button — the control is simply absent, not disabled.
-- **Edit**: click a task's text to edit it in place. The field wraps like the display text does, so a two-line task is fully visible while you edit it instead of scrolling.
-- **Focus timer**: ▶ on the top task (only the top task — one thing at a time). Each task shows its total time across every day it's been on the list, and finished tasks keep theirs in the done list.
-  - Pressing play makes the top pip breathe once; there's no permanent "running" colour.
-  - After **90 minutes** of focus, all three pips turn red and one notification says to take a break. Only a **5-minute** stretch with nothing running resets that — a 4-minute pause carries the streak on.
-  - **Locking the screen pauses** immediately. **Sleep, crashes, and shell restarts** end the session at the last 10-second heartbeat, so time asleep is never counted.
-  - If you're back at the keyboard after a break but haven't restarted, the top pip turns **amber**. Opening the panel dismisses it.
-  - Moving another task into the top spot pauses the timer; the new top task waits for its own play press.
-- **Park**: hover a task for a park button. It frees the slot when something urgent comes up, without throwing the task away. Only **one** task can be parked at a time and it never expires — it waits behind `parked 1` in the footer until you bring it back (↺, needs a free slot) or drop it (✕). Parking the running task pauses it.
-- **Footer**: one quiet line under the input — `today · 3h 12m` on the left (click to cycle week, Monday start, month, and year; resets to today on every open), and `parked 1 · done 3` on the right. Each toggle only appears when it has something in it, and opens its list below the footer, one at a time.
-- **Recently done**: collapsed by default behind `done n` in the footer — expand on click to see struck-through entries with restore (↺, mirrored `[ << ]` tag animation) and clear (✕) actions. Capped at the 3 most recent, and cleared automatically at local midnight regardless of count.
-- **All clear**: finishing your last task for the day types out "All clear ✓" instead of just popping in — a slightly bigger payoff reserved for the rarer, bigger moment.
-- Fully local: no network calls, no AI, no telemetry, ever.
+- **Capture first**: the panel opens with the cursor in the input (bind a key to `omarchy-shell shell toggle io.github.hannoammermann.todays-top-3`). Enter adds a task, or saves the text to **Later** once Today has 3, so writing a thought down is never blocked.
+- **Today, 3 slots**: order is priority. Hover a task and press ↑ to focus on it (it becomes #1), whether it's the important one or an easy one to get going.
+- **Steps**: press Tab instead of Enter to add the text as a step of the top task (up to 5, one level). The top task shows its steps with the next open one in bold; the others show `1/3`.
+- **Sorting Later**: Later has three groups — Important, the rest, and Ideas (folded away, not counted). Hover an item for ☆ important, 💡 idea and ⚡ quick win. In the note they are just headings (`## Important`, `## Later`, `## Ideas`) and a ⚡ at the end of a line.
+- **Later**: hover a task to move it to Later. Whenever a slot is free, Later shows right under Today, so planning the day is just ↑. ✕ drops an item.
+- **Done**: ✓ burns the row away in dither blocks. Finished tasks fold into one line ("✓ 2 done today") until midnight, without taking a slot; open it and click one to undo.
+- **Dot strip**: half a year of finished tasks as small dots in the footer, today outlined; `✓ n done` next to it opens today's finished tasks.
+- **Age**: a task waiting since an earlier day shows how long (`3d`).
+- Fully local: no network calls, no AI, no telemetry.
 
 ## Data
 
-Task state lives at `~/.local/state/omarchy/todays-top-3.json`, *not* inside this repo — so cloning, forking, or publishing this code can never expose your actual task content. The containing directory and the file itself are both locked to owner-only permissions (`700`/`600`).
+Today, Later and a Done log live in one markdown note:
 
-Time stats live next to it in `todays-top-3-history.json` (also `600`) as daily totals only — `{ "2026-10-16": 11520 }` — with no task names, so the history records how much you worked, never on what.
+```markdown
+## Today
+- [ ] Update CTA button
+  - [x] Get new copy
+  - [ ] Swap the button
+
+## Important
+- [ ] Renew passport
+
+## Later
+- [ ] Compare NAS boards
+- [ ] Bank run ⚡
+
+## Ideas
+- [ ] Home bar
+
+## Done
+- [x] 2026-11-25 Send the weekly update (2 steps)
+```
+
+By default the note is `~/.local/state/omarchy/todays-top-3.md`, private to this machine (`600`). You can edit it by hand; the panel picks up changes within a second. Ticking a box counts as done, indented checkboxes are steps, more than 3 Today lines spill over into Later, and Done entries older than 30 days are dropped.
+
+**Sync (optional, off by default).** In the widget's settings, turn on *Sync with a note* and choose a `.md` file inside any synced folder: a notes vault (Obsidian and similar), Syncthing, Dropbox. Your lists then show up, and can be edited, on your other devices. The task text then goes wherever that folder syncs; the plugin itself still makes no network calls. Turning sync off copies the current lists back to the local note. Note: sync tools that run inside an app (e.g. an Obsidian sync plugin) only pick up changes while that app is running.
+
+Machine-local state stays in `todays-top-3.json` (today's done list, ids, dates) and `todays-top-3-history.json` (tasks finished per day, no names), both `600`. Upgrading from 0.2 moves your tasks and parked item into the note automatically.
 
 ## Install
 
@@ -52,7 +69,7 @@ omarchy plugin remove io.github.hannoammermann.todays-top-3
 That removes the plugin itself. Your tasks and time history stay behind in case you reinstall; to delete them too:
 
 ```bash
-rm ~/.local/state/omarchy/todays-top-3.json ~/.local/state/omarchy/todays-top-3-history.json
+rm ~/.local/state/omarchy/todays-top-3.json ~/.local/state/omarchy/todays-top-3.md ~/.local/state/omarchy/todays-top-3-history.json
 ```
 
 The plugin never edits your shell or Hyprland config.
@@ -61,11 +78,8 @@ The plugin never edits your shell or Hyprland config.
 
 Nothing to install beyond a standard Omarchy setup. Like all Omarchy plugins it runs unsandboxed as your user; this is everything it touches:
 
-- Reads and writes only the two state files above.
-- Runs `omarchy-shell lock isLocked` every 10 seconds while a timer is running, to pause when the screen locks.
-- Runs `notify-send` (libnotify, included with Omarchy) once when you reach 90 minutes of focus.
-- Uses Wayland idle notifications (`ext-idle-notify`, supported by Hyprland) for the "back but paused" hint.
-- Reads the current theme's `colors.toml` for the amber colour.
+- Reads and writes only the files above (and the note path you choose, if sync is on).
+- Runs `hyprctl binds -j` when the panel opens (to show your shortcut in the tip) and `omarchy bar set` when you change a setting in the panel.
 
 ## License
 
