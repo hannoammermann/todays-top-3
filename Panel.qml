@@ -1086,7 +1086,8 @@ Panel {
               Text {
                 textFormat: Text.PlainText
                 anchors.left: laterLead.right
-                anchors.right: markImportantBtn.left
+                // Full width until hovered; then it makes room for the buttons.
+                anchors.right: laterHover.hovered ? markImportantBtn.left : pullBtn.left
                 anchors.rightMargin: Style.space(4)
                 anchors.verticalCenter: parent.verticalCenter
                 text: Model.displayText(laterRow.modelData.text)
@@ -1394,7 +1395,7 @@ Panel {
               anchors.right: parent.right
               textFormat: Text.PlainText
               visible: root.later.length > 0
-              text: "later " + root.laterTaskCount + (root.laterGroups.ideas.length ? " · " + root.laterGroups.ideas.length + " ideas" : "")
+              text: "later " + root.laterTaskCount + (root.laterGroups.ideas.length ? " · " + root.laterGroups.ideas.length + (root.laterGroups.ideas.length === 1 ? " idea" : " ideas") : "")
               color: root.laterExpanded ? root.bar.foreground : root.dimText
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption

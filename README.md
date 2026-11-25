@@ -8,7 +8,7 @@
 
 All of it lives in three dots in your bar. No chat, no Eisenhower matrix, no network.
 
-![Today's Top 3 popover with three sample tasks, the top one timing at 1h 15m with a pause button, the add field disabled at the 3-task cap, and a footer showing today's 3h 12m alongside parked 1 · done 2](preview.png)
+![Today's Top 3 panel: a capture input, three numbered slots with the first task "Book the omakase place before it's sold out" broken into steps, a quick ⚡ task in slot 2 and an empty slot 3, a Later list grouped into Important and Other with Ideas folded away, and a footer with a half-year dot map of finished days, "✓ 2 done" and a settings gear](preview.png)
 
 ## What it does
 
